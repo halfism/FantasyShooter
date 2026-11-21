@@ -35,4 +35,12 @@ public:
 
 	UPROPERTY()
 	int32 Runs = 0;
+
+	/** 通关次数（打完第 30 波）。0 = 还没赢过 */
+	UPROPERTY()
+	int32 ClearCount = 0;
+
+	/** 最快通关用时（秒）。0 = 还没有记录 */
+	UPROPERTY()
+	float BestClearTime = 0.f;
 };

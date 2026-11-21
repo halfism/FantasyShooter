@@ -25,6 +25,8 @@ protected:
 	void DrawPlaying(AFSGameMode* GM, AFSPlayerChar* P, float U);
 	void DrawTitle(AFSGameMode* GM, float U);
 	void DrawGameOver(AFSGameMode* GM, float U);
+	/** 第 30 波通关的结算。和 GameOver 是两套画面——"赢"和"输"不该长得像 */
+	void DrawVictory(AFSGameMode* GM, float U);
 	void DrawPauseMenu(AFSGameMode* GM, float U);
 	/** 清波后的三选一赐福卡 */
 	void DrawBlessing(AFSGameMode* GM, float U);

@@ -45,17 +45,26 @@ void AFSHUD::DrawHUD()
 	{
 		if (P)
 		{
-			DrawPlaying(GM, P, U);
-
-			// 免死绿闪压在 HUD 之上：这一下要和"普通挨打"彻底区分开
-			if (P->IsAlive() && GM->Phase == EFSPhase::Playing)
+			// 通关结算时不再画战斗 HUD：血条、雷达、提示条穿过结算卡会非常乱，
+			// 而这一刻玩家已经不需要它们了。
+			if (GM->Phase != EFSPhase::Victory)
 			{
-				DrawSaveFlash(U, P->GetDeathSaveFlash());
+				DrawPlaying(GM, P, U);
+
+				// 免死绿闪压在 HUD 之上：这一下要和"普通挨打"彻底区分开
+				if (P->IsAlive() && GM->Phase == EFSPhase::Playing)
+				{
+					DrawSaveFlash(U, P->GetDeathSaveFlash());
+				}
 			}
 		}
 		if (GM->Phase == EFSPhase::GameOver)
 		{
 			DrawGameOver(GM, U);
+		}
+		else if (GM->Phase == EFSPhase::Victory)
+		{
+			DrawVictory(GM, U);
 		}
 	}
 
@@ -206,14 +215,25 @@ void AFSHUD::DrawPlaying(AFSGameMode* GM, AFSPlayerChar* P, float U)
 	// ---------------- 左上：波次 / 击杀 / 金币
 	Txt(FSUtil::L(TEXT("波次"), TEXT("WAVE")), M, M, 0.85f * U, FSPal::Dim);
 	const FString WaveStr = FString::FromInt(GM->Wave);
-	Txt(WaveStr, M, M + 16.f * U, 2.4f * U, FSPal::White);
+	// 终局波用熔金而不是白：眼睛扫过去就知道"这一波不一样"
+	const bool bFinalWave = GM->IsFinalWave();
+	const FLinearColor WaveCol = bFinalWave ? FLinearColor(1.f, 0.72f, 0.28f) : FSPal::White;
+	Txt(WaveStr, M, M + 16.f * U, 2.4f * U, WaveCol);
 
-	// 本波还剩多少：已出生的 + 还没刷出来的，免得玩家在空场里干等
-	if (GM->bWaveActive)
+	// 一局有终点了，就该让"还有多远"随时可见——只显示当前波次的话，
+	// 玩家永远不知道自己是打到一半还是快结束。
+	{
+		const float WX = M + TxtW(WaveStr, 2.4f * U) + 5.f * U;
+		Txt(FString::Printf(TEXT("/ %d"), AFSGameMode::MaxWaves), WX, M + 34.f * U, 0.88f * U,
+			bFinalWave ? FLinearColor(1.f, 0.72f, 0.28f, 0.90f) : FSPal::Dim);
+	}
+
+	// 本波还剩多少：已出生的 + 还没刷出来的，免得玩家在空场里干等。
+	// 终局波不显示——那一波只有一只，数字没有意义
+	if (GM->bWaveActive && !bFinalWave)
 	{
 		const FString RemStr = FS_FMT(TEXT("剩余 %d"), TEXT("%d LEFT"), GM->GetWaveRemaining());
-		Txt(RemStr, M + TxtW(WaveStr, 2.4f * U) + 12.f * U, M + 30.f * U, 0.9f * U,
-			FLinearColor(0.72f, 0.78f, 0.88f));
+		Txt(RemStr, M, M + 48.f * U, 0.9f * U, FLinearColor(0.72f, 0.78f, 0.88f));
 	}
 
 	const float InfoY = M + 78.f * U;
@@ -293,8 +313,10 @@ void AFSHUD::DrawPlaying(AFSGameMode* GM, AFSPlayerChar* P, float U)
 	}
 	if (Boss)
 	{
-		const float BW = SW * 0.44f;
-		const float BH = 13.f * U;
+		const bool bFinal = Boss->IsFinalBoss();
+		// 终局的条更宽：这一战没有小怪陪衬，血条就是玩家唯一的进度参照
+		const float BW = SW * (bFinal ? 0.52f : 0.44f);
+		const float BH = (bFinal ? 16.f : 13.f) * U;
 		const float BX = (SW - BW) * 0.5f;
 		const float BY = SH * 0.062f;
 		const int32 Ph = FMath::Clamp(Boss->GetBossPhase(), 1, 3);
@@ -304,7 +326,13 @@ void AFSHUD::DrawPlaying(AFSGameMode* GM, AFSPlayerChar* P, float U)
 		// 阶段配色：越往后越刺眼。
 		// 两种 BOSS 各用一套色相，玩家扫一眼血槽就知道现在打的是谁。
 		FLinearColor Fill(0.95f, 0.22f, 0.35f);
-		if (bWarlord)
+		if (bFinal)
+		{
+			// 终焉君王：暗金 → 白热金 → 白金。越打越亮，读作"它在燃尽自己"
+			Fill = (Ph == 1) ? FLinearColor(0.92f, 0.62f, 0.22f)
+				: ((Ph == 2) ? FLinearColor(1.00f, 0.74f, 0.28f) : FLinearColor(1.00f, 0.92f, 0.62f));
+		}
+		else if (bWarlord)
 		{
 			// 铁灰 → 熔橙 → 白热
 			Fill = (Ph == 1) ? FLinearColor(0.72f, 0.44f, 0.26f)
@@ -317,9 +345,24 @@ void AFSHUD::DrawPlaying(AFSGameMode* GM, AFSPlayerChar* P, float U)
 		}
 
 		const FFSEnemyDef& BD = FSDefs::Enemy(Boss->GetKind());
-		const FLinearColor NameCol = bWarlord ? FLinearColor(1.f, 0.72f, 0.42f)
+		FLinearColor NameCol = bWarlord ? FLinearColor(1.f, 0.72f, 0.42f)
 			: FLinearColor(1.f, 0.55f, 0.55f);
-		Txt(FSUtil::L(BD.NameCN, BD.NameEN), SW * 0.5f, BY - 26.f * U, 1.05f * U, NameCol, true);
+		if (bFinal) { NameCol = FLinearColor(1.f, 0.88f, 0.52f); }
+
+		Txt(FSUtil::L(BD.NameCN, BD.NameEN), SW * 0.5f, BY - (bFinal ? 30.f : 26.f) * U,
+			(bFinal ? 1.30f : 1.05f) * U, NameCol, true);
+
+		// 终局：名字两侧各一个金块，充当"终局战"的角标。
+		// 不用浮夸装饰——玩家已经在打了，需要的是"这是最后一战"这一个信息。
+		if (bFinal)
+		{
+			const float NW = TxtW(FSUtil::L(BD.NameCN, BD.NameEN), 1.30f * U);
+			const float GX = SW * 0.5f - NW * 0.5f - 16.f * U;
+			const float GY = BY - 30.f * U + 9.f * U;
+			const float GS = 5.f * U;
+			DrawRect(NameCol, GX, GY, GS, GS);
+			DrawRect(NameCol, SW * 0.5f + NW * 0.5f + 11.f * U, GY, GS, GS);
+		}
 
 		Bar(BX, BY, BW, BH, Boss->GetHealthPct(), Fill, FLinearColor(0.f, 0.f, 0.f, 0.58f));
 		DrawRect(FLinearColor(1.f, 1.f, 1.f, 0.12f), BX, BY, BW, 2.f * U);
@@ -704,6 +747,90 @@ void AFSHUD::DrawGameOver(AFSGameMode* GM, float U)
 
 	Txt(FSUtil::L(TEXT("ESC 暂停 / 退出"), TEXT("ESC = PAUSE / QUIT")), CX, SH * 0.94f,
 		1.0f * U, FSPal::Dim, true);
+}
+
+void AFSHUD::DrawVictory(AFSGameMode* GM, float U)
+{
+	// 底色压暗但偏暖：胜利不该沿用 GameOver 那层血红，
+	// 结算的第一眼就该让人知道"这次是赢了"。
+	DrawRect(FLinearColor(0.028f, 0.018f, 0.006f, 0.90f), 0.f, 0.f, SW, SH);
+
+	const float CX = SW * 0.5f;
+	const float T = GetWorld()->GetTimeSeconds();
+	const FLinearColor Gold(1.f, 0.76f, 0.32f);
+	const FLinearColor GoldDim(0.86f, 0.64f, 0.30f);
+
+	// 居中的暗卡：不铺满，四周留出战场轮廓。
+	// 没有这块卡的话，HUD 底下的玩家、雷达、掉落会直接穿到数据行上——实测第一版就是这样，
+	// "波次 30/30" 正好压在自己角色身上。
+	{
+		const float PW = SW * 0.54f;
+		const float PX = CX - PW * 0.5f;
+		const float PY = SH * 0.115f;
+		const float PH = SH * 0.775f;
+		DrawRect(FLinearColor(0.055f, 0.040f, 0.018f, 0.88f), PX, PY, PW, PH);
+		// 四边金线：只画上下两条就够，左右用 1px 收个边
+		DrawRect(FLinearColor(Gold.R, Gold.G, Gold.B, 0.45f), PX, PY, PW, 1.6f * U);
+		DrawRect(FLinearColor(Gold.R, Gold.G, Gold.B, 0.45f), PX, PY + PH - 1.6f * U, PW, 1.6f * U);
+		DrawRect(FLinearColor(Gold.R, Gold.G, Gold.B, 0.18f), PX, PY, 1.2f * U, PH);
+		DrawRect(FLinearColor(Gold.R, Gold.G, Gold.B, 0.18f), PX + PW - 1.2f * U, PY, 1.2f * U, PH);
+	}
+
+	// 标题上下各一条呼吸的金线：比画个光环更像"仪式收尾"，也不会压到字
+	const float LineW = 220.f * U;
+	const float LineA = 0.55f + 0.25f * FMath::Sin(T * 2.0f);
+	DrawRect(FLinearColor(Gold.R, Gold.G, Gold.B, LineA), CX - LineW * 0.5f, SH * 0.158f, LineW, 2.f * U);
+	DrawRect(FLinearColor(Gold.R, Gold.G, Gold.B, LineA), CX - LineW * 0.5f, SH * 0.272f, LineW, 2.f * U);
+
+	Txt(FSUtil::L(TEXT("通    关"), TEXT("CLEARED")), CX, SH * 0.184f, 3.4f * U, Gold, true);
+
+	if (GM->ClearCount <= 1)
+	{
+		Txt(FSUtil::L(TEXT("首 次 通 关"), TEXT("FIRST CLEAR")), CX, SH * 0.286f, 1.05f * U, GoldDim, true);
+	}
+	else
+	{
+		Txt(FS_FMT(TEXT("第 %d 次通关"), TEXT("CLEAR #%d"), GM->ClearCount),
+			CX, SH * 0.286f, 1.05f * U, GoldDim, true);
+	}
+
+	Txt(FSUtil::L(TEXT("终 焉 君 王  已 倒 下"), TEXT("THE LAST SOVEREIGN HAS FALLEN")),
+		CX, SH * 0.330f, 0.98f * U, FSPal::Dim, true);
+
+	// 数据做成"标签靠左、数值靠右"的两列，整块以 CX 为轴居中：
+	// 左列右边界在 CX-16，右列左边界在 CX+16，视觉上就是一条中缝。
+	const float RowY = SH * 0.415f;
+	const float RowH = 34.f * U;
+	const float ColL = CX - 150.f * U;   // 标签左对齐
+	const float ColR = CX + 150.f * U;   // 数值右对齐
+
+	int32 RowIdx = 0;
+	auto Row = [&](const TCHAR* CN, const TCHAR* EN, const FString& Val, const FLinearColor& C)
+	{
+		const float Y = RowY + RowH * RowIdx++;
+		Txt(FSUtil::L(CN, EN), ColL, Y, 1.10f * U, FSPal::Dim);
+		Txt(Val, ColR - TxtW(Val, 1.10f * U), Y, 1.10f * U, C);
+	};
+
+	Row(TEXT("波 次"), TEXT("WAVE"), FS_FMT(TEXT("%d / %d"), TEXT("%d / %d"), GM->Wave, AFSGameMode::MaxWaves), Gold);
+	Row(TEXT("用 时"), TEXT("TIME"), FString::Printf(TEXT("%.1f s"), GM->RunTime), FSPal::White);
+	Row(TEXT("击 杀"), TEXT("KILLS"), FString::FromInt(GM->Kills), FSPal::White);
+	Row(TEXT("金 币"), TEXT("COINS"), FString::FromInt(GM->Coins), FSPal::Gold);
+	Row(TEXT("最高连击"), TEXT("BEST COMBO"), FString::Printf(TEXT("x%d"), GM->RunBestCombo), FSPal::Cyan);
+	if (GM->BestClearTime > 0.f)
+	{
+		Row(TEXT("最快通关"), TEXT("BEST TIME"), FString::Printf(TEXT("%.1f s"), GM->BestClearTime), GoldDim);
+	}
+
+	// 两条出路：默认再开一局，想继续的可以接着打（无尽模式没有终点）
+	const float Pulse = 0.62f + 0.38f * FMath::Sin(T * 3.0f);
+	Txt(FSUtil::L(TEXT("R / 左键     再 来 一 局"), TEXT("R / CLICK     NEW RUN")),
+		CX, SH * 0.735f, 1.40f * U, FLinearColor(1.f, 1.f, 1.f, Pulse), true);
+	Txt(FSUtil::L(TEXT("E     继 续 无 尽 （没有终点了）"), TEXT("E     CONTINUE ENDLESS (NO FINISH LINE)")),
+		CX, SH * 0.788f, 1.08f * U, FLinearColor(Gold.R, Gold.G, Gold.B, 0.90f), true);
+
+	Txt(FSUtil::L(TEXT("ESC 暂停 / 退出"), TEXT("ESC = PAUSE / QUIT")), CX, SH * 0.845f,
+		0.95f * U, FSPal::Dim, true);
 }
 
 void AFSHUD::DrawPauseMenu(AFSGameMode* GM, float U)

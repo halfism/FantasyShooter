@@ -115,6 +115,18 @@ namespace FSDefs
 				D.Color = FLinearColor(0.36f, 0.31f, 0.29f); D.Accent = FLinearColor(1.00f, 0.42f, 0.12f);
 				Table[8] = D;
 			}
+			{
+				// 终焉君王：前两者的合体，第 30 波。
+				// 数值只比 30 波的普通 BOSS 高一档（血量 +21%），真正加的是"招式组合"——
+				// 一阶段考甲与弹幕，二阶段考震波与冲锋，三阶段同时考两套解法。
+				// 血再厚就变成磨了，而这一战该死在"同时处理两件事"上，不是死在血量条上。
+				FFSEnemyDef D;
+				D.NameCN = TEXT("终焉君王"); D.NameEN = TEXT("LAST SOVEREIGN");
+				D.MaxHP = 2600.f; D.Speed = 196.f; D.ContactDamage = 42.f; D.BodyScale = 3.3f;
+				D.Radius = 152.f; D.Coins = 220; D.bRanged = true;
+				D.Color = FLinearColor(0.30f, 0.16f, 0.34f); D.Accent = FLinearColor(1.00f, 0.55f, 0.25f);
+				Table[9] = D;
+			}
 		}
 		int32 I = FMath::Clamp((int32)K, 0, (int32)EFSEnemyKind::Count - 1);
 		return Table[I];
@@ -334,23 +346,19 @@ namespace FSDefs
 	{
 		switch (E)
 		{
-		case EFSElite::Frenzy:   return FLinearColor(1.00f, 0.26f, 0.22f);
-		case EFSElite::Thorn:    return FLinearColor(0.76f, 0.36f, 1.00f);
-		case EFSElite::Regen:    return FLinearColor(0.32f, 0.98f, 0.52f);
-		case EFSElite::Volatile: return FLinearColor(1.00f, 0.72f, 0.14f);
+		case EFSElite::Frenzy:   return FLinearColor(1.00f, 0.13f, 0.09f);
+		case EFSElite::Thorn:    return FLinearColor(0.72f, 0.18f, 1.00f);
+		case EFSElite::Regen:    return FLinearColor(0.16f, 1.00f, 0.38f);
+		case EFSElite::Volatile: return FLinearColor(1.00f, 0.60f, 0.04f);
 		default:                 return FLinearColor(0.80f, 0.85f, 0.95f);
 		}
 	}
 
 	FLinearColor EliteRingColor(EFSElite E)
 	{
-		// 只掺一点点白：掺多了会被泛光整条冲成白色，"颜色 = 词缀"这层信息就没了。
-		// 亮度靠材质自发光强度抬，而不是靠把颜色推向白色。
-		const FLinearColor C = EliteColor(E);
-		return FLinearColor(
-			FMath::Lerp(C.R, 1.f, 0.15f),
-			FMath::Lerp(C.G, 1.f, 0.15f),
-			FMath::Lerp(C.B, 1.f, 0.15f));
+		// 一点都不掺白：暗场泛光本来就强，掺白就等于把整圈推向"白灯泡"，
+		// "颜色 = 词缀"这层信息立刻丢失。亮度交给自发光强度控制，色相保持纯的。
+		return EliteColor(E);
 	}
 
 	namespace

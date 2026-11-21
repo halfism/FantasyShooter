@@ -91,7 +91,10 @@ void AFSEnemy::Setup(EFSEnemyKind InKind, float HPScale, float SizeMul, EFSElite
 
 		if (Elite == EFSElite::Frenzy)
 		{
-			Speed *= 1.28f;
+			// 上限 640：玩家跑 660。疾行鬼本身 520，乘 1.28 会到 666 ——
+			// 那会造出一只"追得上你、你永远拉不开"的怪，跑位这条解法直接消失。
+			// 留 3% 的速度差，玩家能勉强拉开，但代价是一直在跑。
+			Speed = FMath::Min(Speed * 1.28f, 640.f);
 		}
 	}
 
@@ -111,7 +114,7 @@ void AFSEnemy::Setup(EFSEnemyKind InKind, float HPScale, float SizeMul, EFSElite
 	SlamCd = 3.2f;
 	SlamTelegraph = 0.f;
 	SlamR = 0.f;
-	SlamRMax = 760.f;
+	SlamRMax = (Kind == EFSEnemyKind::Tyrant) ? 880.f : 760.f;
 	bSlamWave = false;
 	bSlamHitPlayer = false;
 	SlamPending = 0;
@@ -127,7 +130,8 @@ void AFSEnemy::Setup(EFSEnemyKind InKind, float HPScale, float SizeMul, EFSElite
 		FLinearColor(0.012f, 0.014f, 0.020f), true, 1.0f);
 
 	// ---- 重甲的数值必须在 BuildVisual 之前定好：建模型时按 bHasArmor 登记甲片
-	bHasArmor = (Kind == EFSEnemyKind::Shielder || Kind == EFSEnemyKind::Warlord);
+	bHasArmor = (Kind == EFSEnemyKind::Shielder || Kind == EFSEnemyKind::Warlord
+		|| Kind == EFSEnemyKind::Tyrant);
 	bArmorBroken = false;
 	ArmorBreakT = 0.f;
 	ArmorFlash = 0.f;
@@ -148,11 +152,19 @@ void AFSEnemy::Setup(EFSEnemyKind InKind, float HPScale, float SizeMul, EFSElite
 		// 换来"正面全伤 + 易伤"，是给"就是不想绕背"的玩家留的第二条路。
 		ArmorHPMax = MaxHP * 0.26f;
 	}
+	else if (Kind == EFSEnemyKind::Tyrant)
+	{
+		// 终焉君王：甲比君王还薄一点（0.20 倍）。
+		// 它的三阶段本来就要求"换着解两套招"，甲再厚会把玩家钉在原地磨血；
+		// 这里让"打穿"是能在一阶段内做到的，逼玩家做的选择是"现在打还是先躲弹幕"。
+		ArmorHPMax = MaxHP * 0.20f;
+	}
 	ArmorHP = ArmorHPMax;
 
 	BuildVisual();
 
-	if (Kind == EFSEnemyKind::Warlord)
+	// 震波环：熔铁君王与终焉君王共用同一套（后者只在二阶段起用它）
+	if (Kind == EFSEnemyKind::Warlord || Kind == EFSEnemyKind::Tyrant)
 	{
 		BuildSlamRing();
 	}
@@ -342,6 +354,55 @@ void AFSEnemy::BuildVisual()
 		AddPart(TEXT("Cylinder"), FVector(0, 0, G + R * 0.06f), FVector(1.45f, 1.45f, 0.03f), Molten, true, 0.42f);
 		break;
 	}
+	case EFSEnemyKind::Tyrant:
+	{
+		// 合体造型：**下半身是君王的方铁，上半身是巫师领主的袍与冠**。
+		// 这不是随便拼的——它的招式正好是"上半身出弹幕、下半身出震波"，
+		// 玩家在二阶段看到它蹲下去蓄震的时候，形状上已经先有了一半预告。
+		const FLinearColor Iron(0.30f, 0.27f, 0.28f);
+		const FLinearColor IronDark(0.18f, 0.16f, 0.19f);
+		const FLinearColor Robe = D.Color;      // 暗紫袍
+		const FLinearColor Molten = D.Accent;   // 熔金
+
+		// 腿与铁裙
+		AddPart(TEXT("Cube"), FVector(0, -R * 0.44f, G + R * 0.34f), FVector(0.50f, 0.42f, 0.70f), IronDark);
+		AddPart(TEXT("Cube"), FVector(0, R * 0.44f, G + R * 0.34f), FVector(0.50f, 0.42f, 0.70f), IronDark);
+		AddPart(TEXT("Cylinder"), FVector(0, 0, G + R * 0.80f), FVector(1.34f, 1.34f, 0.52f), Iron);
+
+		// 躯干：紫袍（比君王窄，比巫师宽）
+		AddPart(TEXT("Cube"), FVector(0, 0, G + R * 1.36f), FVector(1.14f, 1.26f, 1.22f), Robe);
+
+		// 肩甲：君王的宽肩
+		AddPart(TEXT("Cube"), FVector(0, -R * 0.70f, G + R * 1.72f), FVector(0.98f, 0.62f, 0.56f), Iron);
+		AddPart(TEXT("Cube"), FVector(0, R * 0.70f, G + R * 1.72f), FVector(0.98f, 0.62f, 0.56f), Iron);
+
+		// 胸口甲缝：一条横贯 + 三条竖纹，四件一起登记为"正面甲"。
+		// 数值上它是 0.20 倍血量，打法上它决定"能不能正面硬拆"。
+		AddPart(TEXT("Cube"), FVector(R * 0.60f, 0, G + R * 1.46f), FVector(0.10f, 0.96f, 0.14f), Molten, true, 0.95f);
+		MarkLastAsArmor(FVector(R * 0.60f, 0, G + R * 1.46f), FVector(0.10f, 0.96f, 0.14f));
+		for (int32 i = -1; i <= 1; ++i)
+		{
+			AddPart(TEXT("Cube"), FVector(R * 0.70f, i * R * 0.28f, G + R * 1.14f),
+				FVector(0.06f, 0.09f, 0.86f), Molten, true, 0.90f);
+			MarkLastAsArmor(FVector(R * 0.70f, i * R * 0.28f, G + R * 1.14f), FVector(0.06f, 0.09f, 0.86f));
+		}
+
+		// 头 + 尖冠（巫师的轮廓，但冠用熔金而不是铁灰）。
+		// 冠做成细高的金锥：第一版冠是灰的，俯视角下整颗头读成"一顶宽檐草帽"。
+		AddPart(TEXT("Sphere"), FVector(0, 0, G + R * 2.02f), FVector(0.56f, 0.56f, 0.62f), IronDark);
+		AddPart(TEXT("Cone"), FVector(0, 0, G + R * 2.52f), FVector(0.42f, 0.42f, 0.82f), Molten, true, 0.70f);
+		// 目缝：一条熔金横线，是脸上唯一发光的地方
+		AddPart(TEXT("Cube"), FVector(R * 0.40f, 0, G + R * 2.06f), FVector(0.05f, 0.42f, 0.09f), Molten, true, 1.10f);
+
+		// "它是法系"这件事交给一颗悬浮在右肩外的法球来说，而不是头顶一个圆盘。
+		// 圆盘在俯视角下是实心一块，怎么调都像饼；一颗小球既有指向性，又不占视觉重心。
+		AddPart(TEXT("Sphere"), FVector(R * 0.98f, -R * 0.52f, G + R * 1.62f),
+			FVector(0.23f, 0.23f, 0.23f), Molten, true, 0.85f);
+
+		// 脚下熔岩圈：比君王亮一档——它是这一战的终点，值得亮
+		AddPart(TEXT("Cylinder"), FVector(0, 0, G + R * 0.06f), FVector(1.55f, 1.55f, 0.03f), Molten, true, 0.55f);
+		break;
+	}
 	}
 }
 
@@ -480,6 +541,26 @@ void AFSEnemy::Tick(float DeltaSeconds)
 			Vel = FVector::ZeroVector;
 		}
 		break;
+	case EFSEnemyKind::Tyrant:
+		// 终焉君王：一阶段沿用巫师的"保持距离环绕"——弹幕需要射程空间；
+		// 二阶段起换成君王的压上，因为震波只有贴近才有威胁。
+		// 走位方式是它两个"父本"的拼合，玩家能从它靠近/后退的节奏里读出当前阶段。
+		if (BossPhase == 1)
+		{
+			if (Dist > 1250.f) Vel = Dir * Speed;
+			else if (Dist < 800.f) Vel = -Dir * Speed * 0.65f;
+			else Vel = Perp * Speed * 0.55f;
+		}
+		else
+		{
+			Vel = Dir * Speed * (1.f + 0.10f * (BossPhase - 1));
+		}
+		// 蓄力/放波时定身：震波中心跟着跑的话，玩家没法判断该往哪躲
+		if (SlamTelegraph > 0.f || bSlamWave)
+		{
+			Vel = FVector::ZeroVector;
+		}
+		break;
 	case EFSEnemyKind::Boss:
 		// 阶段越高越不耐烦：贴身距离缩短、环绕速度加快
 		if (BossPhase == 1)
@@ -509,15 +590,21 @@ void AFSEnemy::Tick(float DeltaSeconds)
 		Vel = FVector::ZeroVector;
 	}
 
-	// 熔铁君王的震波：与移动解耦，蓄力期间定身
-	if (Kind == EFSEnemyKind::Warlord)
+	// 震波：与移动解耦，蓄力期间定身。
+	// 终焉君王二阶段起才启用——一阶段留给弹幕，让玩家先把它当巫师打。
+	if (Kind == EFSEnemyKind::Warlord
+		|| (Kind == EFSEnemyKind::Tyrant && BossPhase >= 2))
 	{
 		UpdateSlam(DeltaSeconds, Dir, Dist);
 	}
 
-	// BOSS 冲锋：先蓄力抖动（可预判），再沿直线高速突进
+	// BOSS 冲锋：先蓄力抖动（可预判），再沿直线高速突进。
+	// 终焉君王只在三阶段加入冲锋：那时震波已经把玩家赶到外圈，冲锋正好扫在外圈——
+	// 两个机制咬在一起，而不是各打各的。
+	const bool bDashUser = (Kind == EFSEnemyKind::Boss && BossPhase >= 2)
+		|| (Kind == EFSEnemyKind::Tyrant && BossPhase >= 3);
 	float VisualJitter = 0.f;
-	if (Kind == EFSEnemyKind::Boss && BossPhase >= 2)
+	if (bDashUser)
 	{
 		DashCd -= DeltaSeconds;
 		if (DashTelegraph > 0.f)
@@ -583,6 +670,7 @@ void AFSEnemy::Tick(float DeltaSeconds)
 	float TurnRate = 900.f;
 	if (Kind == EFSEnemyKind::Shielder) { TurnRate = 150.f; }
 	else if (Kind == EFSEnemyKind::Warlord) { TurnRate = 55.f; }   // 重甲，转身极慢
+	else if (Kind == EFSEnemyKind::Tyrant) { TurnRate = 85.f; }   // 有甲，但还得瞄准放弹幕
 	else if (Kind == EFSEnemyKind::Boss) { TurnRate = 210.f; }
 	SetActorRotation(FRotator(0.f, FMath::FixedTurn(GetActorRotation().Yaw, Dir.Rotation().Yaw, TurnRate * DeltaSeconds), 0.f));
 
@@ -613,25 +701,33 @@ void AFSEnemy::Tick(float DeltaSeconds)
 
 	// 远程攻击
 	const FVector Muzzle = GetActorLocation() + FVector(0.f, 0.f, Radius * 0.9f);
-	if (Kind == EFSEnemyKind::Boss)
+	if (Kind == EFSEnemyKind::Boss || Kind == EFSEnemyKind::Tyrant)
 	{
+		const bool bIsTyrant = (Kind == EFSEnemyKind::Tyrant);
 		const bool bBusy = (DashTime > 0.f || DashTelegraph > 0.f);
 		if (FireCooldown <= 0.f && !bBusy && Dist < 2800.f)
 		{
-			const int32 Shots = (BossPhase == 1) ? 3 : 5;
-			const float Spread = (BossPhase == 1) ? 16.f : 13.f;
-			BossFireFan(Shots, Spread, 2050.f, 14.f + BossPhase * 3.f, Dir, Muzzle);
-			FireCooldown = (BossPhase == 1) ? 1.90f : (BossPhase == 2 ? 1.55f : 1.30f);
+			// 巫师 3/5 发；终焉君王 3/4/5 发，逐阶段"加宽"而不"加密"——
+			// 它二阶段起已经有震波在逼位，扇射再密就没有能站的地方了。
+			const int32 Shots = bIsTyrant ? (2 + BossPhase) : ((BossPhase == 1) ? 3 : 5);
+			const float Spread = bIsTyrant ? 14.f : ((BossPhase == 1) ? 16.f : 13.f);
+			const float ShotSpeed = bIsTyrant ? 1900.f : 2050.f;
+			const float BaseDmg = (bIsTyrant ? 15.f : 14.f) + BossPhase * 3.f;
+			BossFireFan(Shots, Spread, ShotSpeed, BaseDmg, Dir, Muzzle);
+			FireCooldown = bIsTyrant
+				? ((BossPhase == 1) ? 2.05f : (BossPhase == 2 ? 1.85f : 1.55f))
+				: ((BossPhase == 1) ? 1.90f : (BossPhase == 2 ? 1.55f : 1.30f));
 		}
 
-		// 第三阶段追加环形弹幕：必须靠走位穿过弹幕缝隙
+		// 第三阶段追加环形弹幕：必须靠走位穿过弹幕缝隙。
+		// 终焉君王这一层放到 5.0 秒——它同时还有震波和冲锋，三个都按原速会变成"只能用冲刺解全部"。
 		if (BossPhase >= 3)
 		{
 			RingCd -= DeltaSeconds;
 			if (RingCd <= 0.f)
 			{
-				RingCd = 3.8f;
-				BossFireRing(14, 1450.f, 13.f, Time * 0.9f, Muzzle);
+				RingCd = bIsTyrant ? 5.0f : 3.8f;
+				BossFireRing(bIsTyrant ? 16 : 14, 1450.f, 13.f, Time * 0.9f, Muzzle);
 				FSAudio::Play(this, EFSSfx::Launcher, Loc, 0.9f, 0.80f);
 			}
 		}
@@ -664,24 +760,40 @@ void AFSEnemy::Tick(float DeltaSeconds)
 				GM->SpawnEnemyAt(Guard, Sp);
 			}
 		}
+		else if (Kind == EFSEnemyKind::Tyrant)
+		{
+			// 终焉君王的阶段兵不是"加难度"，而是每阶段补一个跟当前招式打配合的：
+			//   P1 弹幕 → 术士（躲扇射时多一路远程，逼你换位而不是原地绕）
+			//   P2 震波 → 刀兵（你被波纹赶着跑，它正好堵在跑位上）
+			//   P3 合招 → 铁卫（清还是不清？这是这一阶段唯一能让你算错的选项）
+			SummonCooldown = (BossPhase >= 3) ? 9.f : 11.f;
+			const EFSEnemyKind Guard = (BossPhase >= 3) ? EFSEnemyKind::Shielder
+				: ((BossPhase == 2) ? EFSEnemyKind::Grunt : EFSEnemyKind::Mage);
+			for (int32 i = 0; i < 2; ++i)
+			{
+				const float A = PI * i + Time * 0.7f;
+				const FVector Sp = Loc + FVector(FMath::Cos(A), FMath::Sin(A), 0.f) * (Radius + 210.f);
+				GM->SpawnEnemyAt(Guard, Sp);
+			}
+		}
 		else
 		{
-		SummonCooldown = (BossPhase >= 3) ? 6.5f : 9.f;
-		for (int32 i = 0; i < 3; ++i)
-		{
-			const float A = (i / 3.f) * 6.283f + Time;
-			const FVector Sp = Loc + FVector(FMath::Cos(A), FMath::Sin(A), 0.f) * (Radius + 150.f);
-			EFSEnemyKind SummonKind = EFSEnemyKind::Slime;
-			if (BossPhase == 2)
+			SummonCooldown = (BossPhase >= 3) ? 6.5f : 9.f;
+			for (int32 i = 0; i < 3; ++i)
 			{
-				SummonKind = EFSEnemyKind::Runner;
+				const float A = (i / 3.f) * 6.283f + Time;
+				const FVector Sp = Loc + FVector(FMath::Cos(A), FMath::Sin(A), 0.f) * (Radius + 150.f);
+				EFSEnemyKind SummonKind = EFSEnemyKind::Slime;
+				if (BossPhase == 2)
+				{
+					SummonKind = EFSEnemyKind::Runner;
+				}
+				else if (BossPhase >= 3)
+				{
+					SummonKind = (i == 0) ? EFSEnemyKind::Mage : EFSEnemyKind::Grunt;
+				}
+				GM->SpawnEnemyAt(SummonKind, Sp);
 			}
-			else if (BossPhase >= 3)
-			{
-				SummonKind = (i == 0) ? EFSEnemyKind::Mage : EFSEnemyKind::Grunt;
-			}
-			GM->SpawnEnemyAt(SummonKind, Sp);
-		}
 		}
 	}
 
@@ -744,7 +856,7 @@ void AFSEnemy::BuildEliteFx()
 	// 暗芯放到 0.90 倍，环带只剩 10% 宽，才像"标在地板上的一圈线"。
 	// 自发光强度压到 1 以下：暗场泛光很强，抬到 1.5 整圈会被冲成纯白，颜色信息全丢。
 	EliteRing = FSUtil::AddShape(this, Capsule, TEXT("Cylinder"),
-		FVector(0.f, 0.f, Z), FVector(RingR / 50.f, RingR / 50.f, 0.02f), Ring, true, 0.95f);
+		FVector(0.f, 0.f, Z), FVector(RingR / 50.f, RingR / 50.f, 0.02f), Ring, true, 0.70f);
 
 	EliteRingCore = FSUtil::AddShape(this, Capsule, TEXT("Cylinder"),
 		FVector(0.f, 0.f, Z + 0.6f),
@@ -797,7 +909,7 @@ void AFSEnemy::TickElite(float DeltaSeconds)
 		{
 			// 血越满环越亮：不用血条也能看出"它快回满了"
 			const float K = 0.45f + 0.55f * GetHealthPct();
-			FSUtil::SetShapeColor(EliteRing, Ring * K, 0.95f);
+			FSUtil::SetShapeColor(EliteRing, Ring * K, 0.70f);
 		}
 	}
 }
@@ -957,9 +1069,11 @@ void AFSEnemy::UpdateSlam(float DeltaSeconds, const FVector& Dir, float Dist)
 		{
 			return;
 		}
-		// 起手结束：按阶段排波数，三阶段是三连震
+		// 起手结束：按阶段排波数，三阶段是三连震。
+		// 终焉君王的圈比君王大一圈（同场地、更强的压迫感），这里必须同样用它的基准值——
+		// 否则 EnterBossPhase 里设的 880 会在第一次起手时被 760 覆盖回去。
 		SlamPending = (BossPhase >= 3) ? 3 : ((BossPhase == 2) ? 2 : 1);
-		SlamRMax = 760.f + 70.f * (BossPhase - 1);
+		SlamRMax = (Kind == EFSEnemyKind::Tyrant ? 880.f : 760.f) + 70.f * (BossPhase - 1);
 		SlamNextTick = 0.f;
 		UE_LOG(LogTemp, Log, TEXT("[FSS] slam fire waves=%d rmax=%.0f phase=%d"), SlamPending, SlamRMax, BossPhase);
 	}
@@ -1087,22 +1201,27 @@ void AFSEnemy::EnterBossPhase(int32 NewPhase)
 
 	const FVector Loc = GetActorLocation();
 	const bool bWarlord = (Kind == EFSEnemyKind::Warlord);
-	// 熔铁君王的变身是"炉门炸开"，配色统一走熔铁橙，别和巫师领主的金／品红撞
-	const FLinearColor RingCol = bWarlord ? FLinearColor(1.f, 0.40f, 0.10f) : FLinearColor(1.f, 0.82f, 0.35f);
-	const FLinearColor CoreCol = bWarlord ? FLinearColor(1.f, 0.66f, 0.22f) : FLinearColor(1.f, 0.45f, 0.80f);
+	const bool bTyrant = (Kind == EFSEnemyKind::Tyrant);
+	// 熔铁君王的变身是"炉门炸开"，配色统一走熔铁橙，别和巫师领主的金／品红撞。
+	// 终焉君王用白热金：它是两者的合体，颜色也该是两者的中间值。
+	FLinearColor RingCol = FLinearColor(1.f, 0.82f, 0.35f);
+	FLinearColor CoreCol = FLinearColor(1.f, 0.45f, 0.80f);
+	if (bWarlord) { RingCol = FLinearColor(1.f, 0.40f, 0.10f); CoreCol = FLinearColor(1.f, 0.66f, 0.22f); }
+	else if (bTyrant) { RingCol = FLinearColor(1.f, 0.74f, 0.34f); CoreCol = FLinearColor(1.f, 0.90f, 0.62f); }
 	AFSFx::Shock(GetWorld(), FVector(Loc.X, Loc.Y, 6.f), Radius * 5.4f, RingCol, 0.75f);
 	AFSFx::Burst(GetWorld(), Loc + FVector(0.f, 0.f, Radius * 1.2f), Radius * 2.0f, CoreCol, 0.55f);
 	FSAudio::Play(this, EFSSfx::Boss, Loc, 1.f, (BossPhase >= 3) ? 0.72f : 0.82f);
 
 	// 震波状态清零：变身瞬间不能把上一阶段的波带进新阶段
-	if (bWarlord)
+	if (bWarlord || bTyrant)
 	{
 		SlamTelegraph = 0.f;
 		bSlamWave = false;
 		SlamPending = 0;
 		SlamNextTick = 0.f;
 		SlamCd = 1.6f;
-		SlamRMax = 760.f + 70.f * (BossPhase - 1);
+		// 终焉君王的圈更大：场地还是那块场地，但它该把整块场地都当成危险区
+		SlamRMax = (bTyrant ? 880.f : 760.f) + 70.f * (BossPhase - 1);
 		LayoutSlamRing(0.f, 0.f);
 	}
 
@@ -1137,6 +1256,19 @@ void AFSEnemy::EnterBossPhase(int32 NewPhase)
 			K = (BossPhase >= 3) ? EFSEnemyKind::Shielder
 				: ((BossPhase == 2) ? EFSEnemyKind::Grunt : EFSEnemyKind::Slime);
 		}
+		else if (bTyrant)
+		{
+			// 终焉君王：二阶段刀兵（堵你被波纹赶着跑的那条线），
+			// 三阶段一只术士 + 两个铁卫——"先清哪只"在这个阶段没有正确答案。
+			if (BossPhase == 2)
+			{
+				K = EFSEnemyKind::Grunt;
+			}
+			else
+			{
+				K = (i == 0) ? EFSEnemyKind::Mage : EFSEnemyKind::Shielder;
+			}
+		}
 		else if (BossPhase >= 3)
 		{
 			K = (i == 0) ? EFSEnemyKind::Mage : EFSEnemyKind::Grunt;
@@ -1158,8 +1290,9 @@ void AFSEnemy::BreakArmor()
 
 	// 破甲的额外回报：踉跄。
 	// 君王被打穿的那一下同时会打断正在蓄力的震波——"顶着甲硬砸"这条路才有意义，
-	// 否则它只是"换个位置继续挨打"。
-	if (Kind == EFSEnemyKind::Warlord)
+	// 否则它只是"换个位置继续挨打"。终焉君王同理：三阶段三个招式同时压过来时，
+	// 破甲就是唯一一个"能把它的节奏打断"的操作。
+	if (Kind == EFSEnemyKind::Warlord || Kind == EFSEnemyKind::Tyrant)
 	{
 		if (SlamTelegraph > 0.f || bSlamWave)
 		{
@@ -1171,7 +1304,8 @@ void AFSEnemy::BreakArmor()
 			UE_LOG(LogTemp, Log, TEXT("[FSARMOR] slam interrupted by armor break"));
 		}
 		SlamCd = FMath::Max(SlamCd, 2.6f);
-		StaggerT = 1.10f;
+		// 终焉君王定身短一点：它有三个招式，1.1 秒的输出窗口已经很长了
+		StaggerT = (Kind == EFSEnemyKind::Tyrant) ? 0.85f : 1.10f;
 	}
 	else
 	{
@@ -1302,7 +1436,7 @@ float AFSEnemy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent,
 		FVector ToSrc = DamageCauser->GetActorLocation() - GetActorLocation();
 		ToSrc.Z = 0.f;
 		const FVector ToSrcN = ToSrc.GetSafeNormal();
-		// 铁卫 ±70°，熔铁君王 ±50°（cos 0.34 / 0.64）
+		// 铁卫 ±70°，熔铁君王 与 终焉君王 ±50°（cos 0.34 / 0.64）
 		const float FrontCos = (Kind == EFSEnemyKind::Shielder) ? 0.34f : 0.64f;
 		if (!ToSrcN.IsNearlyZero() && FVector::DotProduct(ToSrcN, GetActorForwardVector()) > FrontCos)
 		{

@@ -29,6 +29,7 @@ enum class EFSEnemyKind : uint8
 	Shielder,   // 铁卫：正面来刀只吃三成，逼玩家绕后
 	Splitter,   // 裂魂：死亡分裂成两只小史莱姆
 	Warlord,    // 熔铁君王：第二种 BOSS。无远程、正面重甲、地面震波
+	Tyrant,     // 终焉君王：第三种 BOSS，第 30 波。前两者的合体，三阶段各用一半招式
 	Count
 };
 
@@ -48,7 +49,9 @@ enum class EFSPhase : uint8
 {
 	Title,
 	Playing,
-	GameOver
+	GameOver,
+	/** 打完第 30 波：这不是"死"，所以不能复用 GameOver 那套文案与配色 */
+	Victory
 };
 
 /** 掉落物类型 */

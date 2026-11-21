@@ -238,6 +238,8 @@ public:
 	void OnFireStop(const FInputActionValue& Value);
 	void OnDash(const FInputActionValue& Value);
 	void OnConfirm(const FInputActionValue& Value);
+	/** 通关后按 E：不进新局，接着打无尽。只在 Victory 阶段有效 */
+	void OnEndless(const FInputActionValue& Value);
 
 	/** 暂停/恢复时清掉残留的移动输入，避免恢复瞬间角色自己跑 */
 	void ClearMoveInput() { PendingMove = FVector2D::ZeroVector; }
@@ -259,6 +261,9 @@ protected:
 
 	UPROPERTY()
 	UInputAction* IA_Dash = nullptr;
+
+	UPROPERTY()
+	UInputAction* IA_Endless = nullptr;
 
 	UPROPERTY()
 	UInputAction* IA_Confirm = nullptr;

@@ -53,7 +53,12 @@ public:
 	float GetRadius() const { return Radius; }
 
 	// ---- BOSS 多阶段
-	bool IsBoss() const { return Kind == EFSEnemyKind::Boss || Kind == EFSEnemyKind::Warlord; }
+	bool IsBoss() const
+	{
+		return Kind == EFSEnemyKind::Boss || Kind == EFSEnemyKind::Warlord || Kind == EFSEnemyKind::Tyrant;
+	}
+	/** 第 30 波的终局 BOSS：HUD 要给它一套专属配色 */
+	bool IsFinalBoss() const { return Kind == EFSEnemyKind::Tyrant; }
 	int32 GetBossPhase() const { return BossPhase; }
 	/** 阶段切换中的硬直/无敌窗口，HUD 依据它画护盾闪光 */
 	bool IsPhaseShifting() const { return PhaseShift > 0.f; }

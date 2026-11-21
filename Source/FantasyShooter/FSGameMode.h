@@ -128,6 +128,21 @@ public:
 	int32 TotalKills = 0;
 	int32 TotalCoins = 0;
 	bool bUnlocked[6] = { true, true, false, false, false, false };
+	/** 通关次数与最快通关用时（秒，0 = 还没通关过） */
+	int32 ClearCount = 0;
+	float BestClearTime = 0.f;
+
+	// ---- 终局
+	/** 打完这一波即通关。叫"终局波"而不是"最终波"，因为它只结束"首次通关"，之后还能继续无尽 */
+	static constexpr int32 MaxWaves = 30;
+	/** 这一局已经通关过（继续无尽后不再重复判定，也不会重复结算） */
+	bool bRunCleared = false;
+	bool IsFinalWave() const { return Wave >= MaxWaves && !bRunCleared; }
+	bool IsEndless() const { return bRunCleared; }
+	/** 通关：第 30 波清空时调用。不写"死亡"那套，否则玩家分不清自己是赢了还是输了 */
+	void WinGame();
+	/** 通关后继续打：Phase 回到 Playing，波次继续往上，但不再有终点 */
+	void ContinueEndless();
 
 	// ---- 怪物列表（存活）
 	TArray<TWeakObjectPtr<AFSEnemy>> Enemies;
@@ -201,6 +216,8 @@ protected:
 
 	bool bArenaBuilt = false;
 	bool bPendingAutoStart = false;
+	/** 本局的战绩是否已经写进存档。防止"通关结算 + 阵亡结算"把同一局的击杀算两遍 */
+	bool bMetaCounted = false;
 
 	// 顿帧状态：用真实时钟计时，不受 SetGlobalTimeDilation 影响，所以慢放本身
 	// 不会把"何时恢复"这件事也一起拖慢。

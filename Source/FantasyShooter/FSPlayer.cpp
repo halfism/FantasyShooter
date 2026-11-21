@@ -1010,6 +1010,13 @@ void AFSPlayerController::EnsureInput()
 	IMC->MapKey(IA_Confirm, EKeys::R);
 	IMC->MapKey(IA_Confirm, EKeys::Enter);
 	IMC->MapKey(IA_Confirm, EKeys::Gamepad_Special_Right);
+
+	// 通关后的"继续无尽"。单独一个 action 而不是复用 Confirm：
+	// R 是"重开"，E 是"接着打"，两个结果的差别很大，不该共用一个键。
+	IA_Endless = NewObject<UInputAction>(this, TEXT("IA_Endless"));
+	IA_Endless->ValueType = EInputActionValueType::Boolean;
+	IMC->MapKey(IA_Endless, EKeys::E);
+	IMC->MapKey(IA_Endless, EKeys::Gamepad_FaceButton_Right);
 }
 
 void AFSPlayerController::BeginPlay()
@@ -1053,6 +1060,7 @@ void AFSPlayerController::SetupInputComponent()
 	EIC->BindAction(IA_Fire, ETriggerEvent::Completed, this, &AFSPlayerController::OnFireStop);
 	EIC->BindAction(IA_Dash, ETriggerEvent::Started, this, &AFSPlayerController::OnDash);
 	EIC->BindAction(IA_Confirm, ETriggerEvent::Started, this, &AFSPlayerController::OnConfirm);
+	EIC->BindAction(IA_Endless, ETriggerEvent::Started, this, &AFSPlayerController::OnEndless);
 }
 
 AFSPlayerChar* AFSPlayerController::GetChar() const
@@ -1093,7 +1101,7 @@ void AFSPlayerController::OnFireStart(const FInputActionValue& Value)
 			GM->StartGame();
 			return;
 		}
-		if (GM->Phase == EFSPhase::GameOver)
+		if (GM->Phase == EFSPhase::GameOver || GM->Phase == EFSPhase::Victory)
 		{
 			GM->RestartAll();
 			return;
@@ -1136,13 +1144,26 @@ void AFSPlayerController::OnConfirm(const FInputActionValue& Value)
 		{
 			return;
 		}
-		if (GM->Phase == EFSPhase::GameOver)
+		if (GM->Phase == EFSPhase::GameOver || GM->Phase == EFSPhase::Victory)
 		{
 			GM->RestartAll();
 		}
 		else if (GM->Phase == EFSPhase::Title)
 		{
 			GM->StartGame();
+		}
+	}
+}
+
+void AFSPlayerController::OnEndless(const FInputActionValue& Value)
+{
+	// 只有通关界面上的 E 才有意义。Playing 时按 E 不做任何事——
+	// 留白比"随手一个键触发一个模式切换"安全。
+	if (AFSGameMode* GM = AFSGameMode::Get(this))
+	{
+		if (GM->Phase == EFSPhase::Victory)
+		{
+			GM->ContinueEndless();
 		}
 	}
 }

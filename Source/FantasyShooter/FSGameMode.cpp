@@ -99,6 +99,22 @@ void AFSGameMode::BeginPlay()
 	LoadMeta();
 	RefreshUnlocks();
 
+	// ---- 调试：-fsresetclear 只清"通关记录"（次数 + 最快用时）。
+	// 自动化验证会真的走一遍通关，把假的战果写进存档；这个开关把那一部分擦掉，
+	// 但**不碰** BestWave / TotalKills 这些真战绩与武器解锁进度。
+	if (FParse::Param(FCommandLine::Get(), TEXT("fsresetclear")))
+	{
+		ClearCount = 0;
+		BestClearTime = 0.f;
+		if (UFSSaveGame* S = Cast<UFSSaveGame>(UGameplayStatics::LoadGameFromSlot(TEXT("FS_Meta"), 0)))
+		{
+			S->ClearCount = 0;
+			S->BestClearTime = 0.f;
+			UGameplayStatics::SaveGameToSlot(S, TEXT("FS_Meta"), 0);
+		}
+		UE_LOG(LogTemp, Log, TEXT("[FSTEST] clear records reset (ClearCount=0, BestClearTime=0)"));
+	}
+
 	// 引擎默认 BloomQuality=4、强度 0.675，自发光物件再亮一点就会被糊成"奶白色光团"。
 	// 这里放一个全局后处理只压泛光，不改曝光，保留发光颜色又不至于糊成一片。
 	if (UWorld* W = GetWorld())
@@ -166,6 +182,8 @@ void AFSGameMode::LoadMeta()
 	BestCombo = S->BestCombo;
 	TotalKills = S->TotalKills;
 	TotalCoins = S->TotalCoins;
+	ClearCount = S->ClearCount;
+	BestClearTime = S->BestClearTime;
 
 	// 设置项：音量与语言在每次启动时恢复，不然玩家每次都得重调一遍
 	if (S->MasterVolume >= 0.f)
@@ -203,12 +221,26 @@ void AFSGameMode::SaveMeta()
 	{
 		return;
 	}
-	S->BestWave = FMath::Max(S->BestWave, Wave);
-	S->BestKills = FMath::Max(S->BestKills, Kills);
-	S->BestCombo = FMath::Max(S->BestCombo, BestCombo);
-	S->TotalKills += Kills;
-	S->TotalCoins += Coins;
-	S->Runs += 1;
+	// 同一局只结算一次：EndGame →（按 R 重开 / 通关后继续无尽再阵亡）这几条路径
+	// 都会走到这里。没有这道闸，TotalKills 与 Runs 会被同一局算两遍。
+	if (!bMetaCounted)
+	{
+		bMetaCounted = true;
+		S->BestWave = FMath::Max(S->BestWave, Wave);
+		S->BestKills = FMath::Max(S->BestKills, Kills);
+		S->BestCombo = FMath::Max(S->BestCombo, BestCombo);
+		S->TotalKills += Kills;
+		S->TotalCoins += Coins;
+		S->Runs += 1;
+	}
+
+	// 通关记录故意放在闸外：一个 GameMode 实例只会 WinGame 一次，
+	// 而"继续无尽后阵亡"不应该把通关次数加回来。
+	S->ClearCount = FMath::Max(S->ClearCount, ClearCount);
+	if (BestClearTime > 0.f && (S->BestClearTime <= 0.f || BestClearTime < S->BestClearTime))
+	{
+		S->BestClearTime = BestClearTime;
+	}
 
 	// 战绩保存时顺手把设置一起带上，避免两份存档互相覆盖
 	S->MasterVolume = FSAudio::GetMasterVolume(this);
@@ -221,6 +253,8 @@ void AFSGameMode::SaveMeta()
 	BestCombo = S->BestCombo;
 	TotalKills = S->TotalKills;
 	TotalCoins = S->TotalCoins;
+	ClearCount = S->ClearCount;
+	BestClearTime = S->BestClearTime;
 	RefreshUnlocks();
 }
 
@@ -243,6 +277,10 @@ void AFSGameMode::StartGame()
 	RuneCount = 0;
 	RunTime = 0.f;
 	SpawnQueue.Reset();
+	SpawnEliteQueue.Reset();
+	// 新一局：终局标记与"战绩已结算"标记都要清掉，否则第二局会在第 30 波直接判胜
+	bRunCleared = false;
+	bMetaCounted = false;
 	InterWave = 1.4f;
 	bWaveActive = false;
 	HPScale = 1.f;
@@ -300,6 +338,76 @@ void AFSGameMode::EndGame()
 	{
 		P->AddShake(24.f);
 	}
+}
+
+void AFSGameMode::WinGame()
+{
+	if (Phase != EFSPhase::Playing)
+	{
+		return;
+	}
+	// 先置 bRunCleared 再切 Phase：IsFinalWave() 依赖它，
+	// 而胜利界面停留期间 Tick 仍可能跑到"清波"分支。
+	bRunCleared = true;
+	Phase = EFSPhase::Victory;
+
+	// 清场：胜利的那一刻不该还有杂兵在旁边晃。
+	// 直接 Destroy 而不是走 Die()，所以不会触发掉落，也不会再算一次击杀。
+	for (const TWeakObjectPtr<AFSEnemy>& W : Enemies)
+	{
+		if (AFSEnemy* E = W.Get())
+		{
+			// 正在播死亡的那一只交给 Die() 自己收尾，别在这里抢着销毁
+			if (!E->IsDead())
+			{
+				E->Destroy();
+			}
+		}
+	}
+	Enemies.Reset();
+	SpawnQueue.Reset();
+	SpawnEliteQueue.Reset();
+
+	// 通关记录：次数 + 最快用时。存档写在这里而不是 EndGame，
+	// 因为"赢"和"死"是两条不该互相覆盖的记分路径。
+	++ClearCount;
+	if (BestClearTime <= 0.f || RunTime < BestClearTime)
+	{
+		BestClearTime = RunTime;
+	}
+	SaveMeta();
+
+	BannerTime = 0.f;
+	FSAudio::Play2D(this, EFSSfx::Guardian, 1.f, 0.72f);
+	if (AFSPlayerChar* P = GetPlayerChar())
+	{
+		P->AddShake(20.f);
+		P->GrantInvuln(6.f);
+		P->Heal(9999.f);
+	}
+	UE_LOG(LogTemp, Log, TEXT("[FSWIN] cleared wave=%d kills=%d time=%.1f clears=%d best_time=%.1f"),
+		Wave, Kills, RunTime, ClearCount, BestClearTime);
+
+	if (FParse::Param(FCommandLine::Get(), TEXT("fscapture")))
+	{
+		FScreenshotRequest::RequestScreenshot(
+			FPaths::ProjectSavedDir() / TEXT("Victory.png"), false, false);
+	}
+}
+
+void AFSGameMode::ContinueEndless()
+{
+	if (Phase != EFSPhase::Victory)
+	{
+		return;
+	}
+	Phase = EFSPhase::Playing;
+	bWaveActive = false;
+	InterWave = 3.0f;
+	SetBanner(FSUtil::L(TEXT("无  尽  模  式"), TEXT("ENDLESS")),
+		FSUtil::L(TEXT("没有终点了 · 看你能撑到第几波"), TEXT("NO FINISH LINE  -  HOW FAR CAN YOU GO")), 2.4f);
+	FSAudio::Play2D(this, EFSSfx::WaveStart, 0.8f, 1.0f);
+	UE_LOG(LogTemp, Log, TEXT("[FSWIN] continue endless at wave=%d"), Wave);
 }
 
 void AFSGameMode::RestartAll()
@@ -623,9 +731,18 @@ void AFSGameMode::StartNextWave()
 
 	// 每 5 波一个 BOSS，两种交替：第 5/15/25 波是巫师领主，第 10/20/30 波是熔铁君王。
 	// 刻意做成完全不同节奏——一个逼你保持距离躲弹幕，一个逼你贴上去但必须绕背躲震波。
-	const bool bBossWave = (Wave % 5 == 0);
+	//
+	// 第 30 波是例外：换成终焉君王（两者的合体）。这一波**只放它一只**——
+	// 它自己会按阶段召唤，再往上堆小怪就变成"先清杂兵再看 BOSS"，把这一战的层次压平了。
+	const bool bFinalWave = IsFinalWave();
+	const bool bBossWave = bFinalWave || (Wave % 5 == 0);
 	EFSEnemyKind BossKind = EFSEnemyKind::Boss;
-	if (bBossWave)
+	if (bFinalWave)
+	{
+		BossKind = EFSEnemyKind::Tyrant;
+		SpawnQueue.Add(BossKind);
+	}
+	else if (bBossWave)
 	{
 		BossKind = (((Wave / 5) % 2) == 1) ? EFSEnemyKind::Boss : EFSEnemyKind::Warlord;
 		SpawnQueue.Add(BossKind);
@@ -633,7 +750,7 @@ void AFSGameMode::StartNextWave()
 	FSAudio::Play2D(this, bBossWave ? EFSSfx::Boss : EFSSfx::WaveStart,
 		bBossWave ? 1.0f : 0.55f, bBossWave ? 1.f : FMath::FRandRange(0.98f, 1.06f));
 
-	const int32 Count = FMath::Min(7 + Wave * 3, 58);
+	const int32 Count = bFinalWave ? 0 : FMath::Min(7 + Wave * 3, 58);
 	for (int32 i = 0; i < Count; ++i)
 	{
 		const float R = FMath::FRand();
@@ -903,6 +1020,18 @@ void AFSGameMode::OnEnemyKilled(AFSEnemy* E, const FVector& Loc)
 	{
 		AddCoins(40);
 		UE_LOG(LogTemp, Log, TEXT("[FSBOSS] defeated kind=%d at wave=%d"), (int32)Kind, Wave);
+	}
+
+	// 终局 BOSS 倒下 = 通关，**不等它召唤的残兵**。
+	// 这一条是实测出来的：第一版走"等 CountAlive()==0"，结果 BOSS 死了以后
+	// 玩家还得去追三只铁卫，胜利提示迟迟不来，情绪正好断在那里。
+	// 终焉君王是这一战的唯一目标，它的召唤物只是招式的一部分。
+	//
+	// 必须带 IsFinalWave()：-fsboss=9 这类调试摆拍会把终焉君王放到第 1 波，
+	// 那种情况下它只是个"血厚的靶子"，不该判通关。
+	if (Kind == EFSEnemyKind::Tyrant && IsFinalWave())
+	{
+		WinGame();
 	}
 }
 
@@ -1291,7 +1420,23 @@ bool AFSGameMode::BlessingClickAt(float MouseX, float MouseY, float ScreenW, flo
 void AFSGameMode::AnnounceBossPhase(AFSEnemy* Boss, int32 NewPhase, const FVector& Loc)
 {
 	const bool bWarlord = Boss && Boss->GetKind() == EFSEnemyKind::Warlord;
-	if (bWarlord)
+	const bool bTyrant = Boss && Boss->GetKind() == EFSEnemyKind::Tyrant;
+	if (bTyrant)
+	{
+		// 终局 BOSS 的文案必须"报招式"而不是"报情绪"：
+		// 玩家到这一阶段已经不需要被告知"它变强了"，需要的是"接下来要防什么"。
+		if (NewPhase == 2)
+		{
+			SetBanner(FSUtil::L(TEXT("第 二 阶 段"), TEXT("PHASE  II")),
+				FSUtil::L(TEXT("它 蹲 下 了 · 震 波 要 来"), TEXT("IT KNEELS  -  QUAKE INCOMING")), 2.4f);
+		}
+		else
+		{
+			SetBanner(FSUtil::L(TEXT("第 三 阶 段"), TEXT("PHASE  III")),
+				FSUtil::L(TEXT("三 招 同 至 · 破 甲 能 打 断 它"), TEXT("ALL THREE AT ONCE  -  BREAK THE ARMOR")), 2.4f);
+		}
+	}
+	else if (bWarlord)
 	{
 		// 君王的两段变身文案都围绕"甲"和"震"，提示玩家该怎么应对，而不是只说变强了
 		if (NewPhase == 2)
@@ -1324,7 +1469,7 @@ void AFSGameMode::AnnounceBossPhase(AFSEnemy* Boss, int32 NewPhase, const FVecto
 	{
 		FScreenshotRequest::RequestScreenshot(
 			FPaths::ProjectSavedDir() / FString::Printf(TEXT("Boss_%s_P%d.png"),
-				bWarlord ? TEXT("Warlord") : TEXT("Archmage"), NewPhase), false, false);
+				bTyrant ? TEXT("Tyrant") : (bWarlord ? TEXT("Warlord") : TEXT("Archmage")), NewPhase), false, false);
 	}
 }
 
@@ -1591,6 +1736,26 @@ void AFSGameMode::Tick(float DeltaSeconds)
 		}
 	}
 
+	// ---- 通关后自动"继续无尽"（-fsendless）：验证这条链路不必人手去按 E。
+	// 只在 Victory 阶段动作一次，之后由 ContinueEndless 把 Phase 拉回 Playing。
+	{
+		static bool bEInit = false;
+		static bool bEOn = false;
+		static bool bEDone = false;
+		if (!bEInit)
+		{
+			bEInit = true;
+			bEOn = FParse::Param(FCommandLine::Get(), TEXT("fsendless"));
+		}
+		if (bEOn && !bEDone && Phase == EFSPhase::Victory)
+		{
+			bEDone = true;
+			ContinueEndless();
+			UE_LOG(LogTemp, Log, TEXT("[FSTEST] auto continue endless -> phase=%d wave=%d"),
+				(int32)Phase, Wave);
+		}
+	}
+
 	// ---- BOSS 定点验证（-fsboss=<序号>）：把指定 BOSS 直接摆到玩家正前方，
 	// 配合 -fsbosshp=0.2 压血可以一次跑完三个阶段，配合 -fscapture 留图。
 	// 有它就不必为了看第二种 BOSS 一路手打到第 10 波。
@@ -1728,8 +1893,11 @@ void AFSGameMode::Tick(float DeltaSeconds)
 			SpawnQueue.Reset();
 			AFSPlayerChar* EP = GetPlayerChar();
 			const FVector Base = EP ? EP->GetActorLocation() : FVector::ZeroVector;
-			const FVector Fwd = EP ? EP->GetActorRotation().Vector() : FVector::ForwardVector;
-			const FVector Right = FVector::CrossProduct(FVector::UpVector, Fwd).GetSafeNormal();
+
+			// 用世界轴而不是玩家朝向：镜头是固定俯角、不跟 yaw 转的，
+			// 按玩家朝向摆会把一整排甩到画面外（实测摆到了左下角）。
+			const FVector Fwd = FVector::ForwardVector;
+			const FVector Right = FVector::RightVector;
 
 			// 体型从瘦到胖排开，顺便也能看出"环的尺寸是跟着体型走的"
 			static const EFSEnemyKind Kinds[4] =
@@ -1738,7 +1906,7 @@ void AFSGameMode::Tick(float DeltaSeconds)
 			};
 			for (int32 i = 0; i < 4; ++i)
 			{
-				const FVector Sp = Base + Fwd * 700.f + Right * ((i - 1.5f) * 330.f);
+				const FVector Sp = Base + Fwd * 640.f + Right * ((i - 1.5f) * 330.f);
 				SpawnEnemyAt(Kinds[i], Sp, 1.f, 1.f, (EFSElite)(i + 1));
 			}
 			EnemySpeedMul = 0.f;
@@ -2433,6 +2601,16 @@ void AFSGameMode::Tick(float DeltaSeconds)
 		else if (bWaveActive && CountAlive() == 0)
 		{
 			bWaveActive = false;
+
+			// ---- 终局：第 30 波清空 = 通关。
+			// 这里必须抢在"弹赐福 / 排下一波"之前返回，否则玩家会先看到一张三选一卡，
+			// 而那张卡打完已经没有下一波可以用了。
+			if (IsFinalWave())
+			{
+				WinGame();
+				return;
+			}
+
 			InterWave = 3.2f;   // 兜底：如果赐福没弹出来（比如已经处于选择中），照常按原节奏推进
 			SetBanner(FS_FMT(TEXT("第 %d 波 清 空"), TEXT("WAVE %d CLEAR"), Wave),
 				FSUtil::L(TEXT("准备迎接下一波"), TEXT("BRACE FOR THE NEXT WAVE")), 1.8f);
