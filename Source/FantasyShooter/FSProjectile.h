@@ -22,6 +22,10 @@ public:
 		bool bInEnemyOwned, const FLinearColor& InColor, float InScale, bool bInExplosive,
 		float InExpRadius, float InExpDamage, AActor* InShooter);
 
+	/** 谁打的（主动技充能要判断"是不是玩家自己打出来的"） */
+	AActor* GetShooter() const { return Shooter; }
+	bool IsEnemyOwned() const { return bEnemyOwned; }
+
 protected:
 	void HandleHit(AActor* HitActor, const FVector& Point);
 	void Explode(const FVector& Point);

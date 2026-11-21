@@ -15,6 +15,34 @@
 #include "UnrealClient.h"
 #include "Misc/Paths.h"
 
+namespace
+{
+	/**
+	 * 这一刀是不是玩家自己打出来的。
+	 * 主动技充能只认这个来源：敌人互伤、环境伤害、玩家自己的招式伤害都不算。
+	 */
+	AFSPlayerChar* PlayerDamageSource(AActor* Causer)
+	{
+		if (!Causer)
+		{
+			return nullptr;
+		}
+		if (AFSPlayerChar* P = Cast<AFSPlayerChar>(Causer))
+		{
+			return P->IsArtDamageLocked() ? nullptr : P;
+		}
+		if (AFSProjectile* Pr = Cast<AFSProjectile>(Causer))
+		{
+			AFSPlayerChar* P = Cast<AFSPlayerChar>(Pr->GetShooter());
+			if (P && !P->IsArtDamageLocked())
+			{
+				return P;
+			}
+		}
+		return nullptr;
+	}
+}
+
 AFSEnemy::AFSEnemy()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -409,6 +437,17 @@ void AFSEnemy::BuildVisual()
 void AFSEnemy::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	// 时缓（玩家主动技）在这里统一生效：参数是按值传的，改一行全身都吃到——
+	// 移动、攻击冷却、蓄力、震波波前、接触伤害节奏全都会跟着慢下来，
+	// 而且不需要在每个用到 DeltaSeconds 的地方各写一次乘区。
+	if (const AFSGameMode* SlowGM = AFSGameMode::Get(this))
+	{
+		if (SlowGM->EnemyTimeScale < 0.999f)
+		{
+			DeltaSeconds *= SlowGM->EnemyTimeScale;
+		}
+	}
 
 	if (bDying)
 	{
@@ -1476,6 +1515,13 @@ float AFSEnemy::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent,
 	HP -= DamageAmount;
 	FlashTimer = 0.085f;
 	SinceHurt = 0.f;
+
+	// 主动技充能：取"减伤 / 护甲 / 易伤都算完"的最终伤害。
+	// 于是"打穿甲的那一刻充能明显加速"是自然结果，不需要再单独写一条奖励规则。
+	if (AFSPlayerChar* Src = PlayerDamageSource(DamageCauser))
+	{
+		Src->AddAbilityCharge(DamageAmount);
+	}
 
 	// 荆棘：贴着它打就反刺。规则单纯到"一看就懂"才有意义——
 	// 不是概率、不是条件分支，只是"你离得太近了"。

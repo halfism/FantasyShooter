@@ -5,6 +5,6 @@ setlocal
 set EDITOR=G:\Epic\EpicApps\UE_5.8\Engine\Binaries\Win64\UnrealEditor.exe
 set ROOT=G:\Epic\UnrealProjects\FantasyShooter58
 "%EDITOR%" "%ROOT%\FantasyShooter.uproject" -game -windowed -resx=1600 -resy=900 ^
-  -fsautostart -fsprobe -fsquit=22 -abslog="%ROOT%\Saved\probe_armor.log"
+  -fsautostart -fsprobe -fsquit=78 -abslog="%ROOT%\Saved\probe_armor.log"
 echo PROBE_EXIT=%ERRORLEVEL% >> "%ROOT%\Saved\probe_armor.log"
 endlocal

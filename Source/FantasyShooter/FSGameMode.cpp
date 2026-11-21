@@ -281,6 +281,8 @@ void AFSGameMode::StartGame()
 	// 新一局：终局标记与"战绩已结算"标记都要清掉，否则第二局会在第 30 波直接判胜
 	bRunCleared = false;
 	bMetaCounted = false;
+	// 时间流速必须无条件归位：上一局若死在时缓里，残留的 0.3 倍速会把新一局拖成慢动作
+	EnemyTimeScale = 1.f;
 	InterWave = 1.4f;
 	bWaveActive = false;
 	HPScale = 1.f;
@@ -420,6 +422,7 @@ void AFSGameMode::RestartAll()
 	bHitStop = false;
 	HitStopEndReal = 0.0;
 	bPaused = false;
+	EnemyTimeScale = 1.f;
 
 	SaveMeta();
 	GFS_AutoStartNextRun = true;
@@ -1933,6 +1936,10 @@ void AFSGameMode::Tick(float DeltaSeconds)
 		static AFSEnemy* PBThorn = nullptr;
 		static TWeakObjectPtr<AFSEnemy> PBVolatile;
 		static float PBPlayerHp = 1.f;
+
+		// 主动技验证用的靶子
+		static AFSEnemy* PBArtTarget = nullptr;
+		static float PBArtHp = 0.f;
 		if (!bPBInit)
 		{
 			bPBInit = true;
@@ -2172,6 +2179,8 @@ void AFSGameMode::Tick(float DeltaSeconds)
 				{
 					FVector D = V->GetActorLocation() - PP->GetActorLocation();
 					D.Z = 0.f;
+					// 先补血：荆棘刚把玩家削到 1%，再吃一发爆裂就变成"测阵亡"而不是"测爆炸"
+					PP->Heal(999.f);
 					PBPlayerHp = PP->GetHealthPct();
 					V->TakeDamage(99999.f, FDamageEvent(), nullptr, PP);
 					UE_LOG(LogTemp, Log, TEXT("[FSPROBE] volatile killed at dist=%.0f fuse=%.2f player hp=%.3f"),
@@ -2181,9 +2190,155 @@ void AFSGameMode::Tick(float DeltaSeconds)
 			else if (PBStage == 10 && El > 0.9)
 			{
 				PBStage = 11;
-				bPBDone = true;
+				PBTick = FPlatformTime::Seconds();
 				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] volatile after fuse: actorValid=%d player hp %.3f => %.3f (expect invalid + lower)"),
 					PBVolatile.IsValid() ? 1 : 0, PBPlayerHp, PP->GetHealthPct());
+
+				// 前面几段把玩家压到 1%：不补满的话，主动技还没测就先死一次
+				PP->Heal(999.f);
+				PP->GrantInvuln(1.0f);
+			}
+			// ---- 流派主动技：三招各验一条数值。
+			// 走真实的 TryAbility 而不是直接调用内部函数，否则"按键那条路"根本没被验证过。
+			else if (PBStage == 11 && El > 1.2)
+			{
+				PBStage = 12;
+				PBTick = FPlatformTime::Seconds();
+
+				for (const TWeakObjectPtr<AFSEnemy>& W : Enemies)
+				{
+					if (AFSEnemy* E = W.Get())
+					{
+						E->Destroy();
+					}
+				}
+				Enemies.Reset();
+
+				// 靶子是拿来打读数的，不是来追着玩家捶的：冻住位移，
+				// 否则它会走到脸上用接触伤害把玩家打死，后半段自检直接断在这里
+				EnemySpeedMul = 0.f;
+				PP->Heal(999.f);
+
+				// 焚场：把流派钉成烈焰觉醒，满充能，靶子摆进圈里
+				for (int32 i = 0; i < (int32)EFSPath::Count; ++i)
+				{
+					PP->DebugSetPathStacks((EFSPath)i, 0);
+				}
+				PP->DebugSetPathStacks(EFSPath::Fury, FSDefs::PathAwakenStacks);
+
+				// 充能速率：觉醒后 0.09 × 1.25 = 每点伤害 0.1125，50 点伤害应当给 5.6%
+				PP->DebugSetAbilityCharge(0.f);
+				PP->AddAbilityCharge(50.f);
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] charge from 50 dmg=%.2f%% (expect ~5.6, awakened bonus)"),
+					PP->GetAbilityChargePct() * 100.f);
+				PP->DebugSetAbilityCharge(100.f);
+
+				const FVector Fwd = PP->GetActorRotation().Vector();
+				// 血 ×4 才能撑到读数那一刻：普通巨兽会在两跳之内死掉
+				PBArtTarget = SpawnEnemyAt(EFSEnemyKind::Brute, PP->GetActorLocation() + Fwd * 260.f, 4.f);
+				PBArtHp = PBArtTarget ? PBArtTarget->GetHealth() : 0.f;
+
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] art bind kind=%d (expect 1=Pyre) charge=%.0f%%"),
+					(int32)PP->GetAbilityKind(), PP->GetAbilityChargePct() * 100.f);
+
+				const int32 CastsBefore = PP->GetAbilityCasts();
+				PP->TryAbility();
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] pyre cast: casts %d=>%d charge=%.0f%% active=%d dur=%.1f targetHp=%.0f"),
+					CastsBefore, PP->GetAbilityCasts(), PP->GetAbilityChargePct() * 100.f,
+					PP->IsAbilityActive() ? 1 : 0, PP->GetAbilityTimeLeft(), PBArtHp);
+			}
+			else if (PBStage == 12 && El > 1.1)
+			{
+				PBStage = 13;
+				PBTick = FPlatformTime::Seconds();
+				PP->Heal(999.f);
+
+				if (PBArtTarget && !PBArtTarget->IsDead())
+				{
+					UE_LOG(LogTemp, Log, TEXT("[FSPROBE] pyre dot after 1.1s: hp %.0f => %.0f (expect lower)"),
+						PBArtHp, PBArtTarget->GetHealth());
+				}
+
+				// 招式进行中：焚场自己的伤害、以及玩家正常开火，都不该攒充能
+				const float ChargeFromArt = PP->GetAbilityChargePct() * 100.f;
+				PP->AddAbilityCharge(200.f);
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] charge during art=%.2f%% then +200 dmg=%.2f%% (both expect 0)"),
+					ChargeFromArt, PP->GetAbilityChargePct() * 100.f);
+			}
+			// ---- 时缓：敌人时间流速必须真的降下来
+			// 必须等焚场自己走完（4.4 秒）：招式不能叠加，硬放会被 TryAbility 挡掉，
+			// 那样日志里读到的 left 其实还是焚场的剩时
+			else if (PBStage == 13 && El > 3.4)
+			{
+				PBStage = 14;
+				PBTick = FPlatformTime::Seconds();
+
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] pyre ended: active=%d (expect 0)"), PP->IsAbilityActive() ? 1 : 0);
+
+				for (int32 i = 0; i < (int32)EFSPath::Count; ++i)
+				{
+					PP->DebugSetPathStacks((EFSPath)i, 0);
+				}
+				PP->DebugSetPathStacks(EFSPath::Swift, FSDefs::PathAwakenStacks);
+				PP->DebugSetAbilityCharge(100.f);
+				PP->TryAbility();
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] slowtime cast: scale=%.2f (expect 0.24) left=%.2f (expect ~3.2) kind=%d (expect 2)"),
+					EnemyTimeScale, PP->GetAbilityTimeLeft(), (int32)PP->GetAbilityKind());
+			}
+			else if (PBStage == 14 && El > 0.6)
+			{
+				PBStage = 15;
+				PBTick = FPlatformTime::Seconds();
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] slowtime holding: scale=%.2f left=%.2f (expect still 0.24 / > 0)"),
+					EnemyTimeScale, PP->GetAbilityTimeLeft());
+			}
+			// ---- 壁垒：护盾先吃伤害，吃穿时炸一圈
+			// 同样要等时缓自然走完（3.2 秒）再放
+			else if (PBStage == 15 && El > 2.8)
+			{
+				PBStage = 16;
+				PBTick = FPlatformTime::Seconds();
+
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] slowtime ended: scale=%.2f active=%d lock=%.1fs (expect 1.00 / 0 / ~8)"),
+					EnemyTimeScale, PP->IsAbilityActive() ? 1 : 0, PP->GetAbilityLock());
+
+				PP->Heal(999.f);
+
+				for (int32 i = 0; i < (int32)EFSPath::Count; ++i)
+				{
+					PP->DebugSetPathStacks((EFSPath)i, 0);
+				}
+				PP->DebugSetPathStacks(EFSPath::Ward, FSDefs::PathAwakenStacks);
+				PP->DebugSetAbilityCharge(100.f);
+				PP->TryAbility();
+
+				const FVector Fwd = PP->GetActorRotation().Vector();
+				PBArtTarget = SpawnEnemyAt(EFSEnemyKind::Brute, PP->GetActorLocation() + Fwd * 200.f, 6.f);
+				PBArtHp = PBArtTarget ? PBArtTarget->GetHealth() : 0.f;
+
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] bulwark cast: shield=%.0f%% dur=%.1f kind=%d (expect 3) targetHp=%.0f"),
+					PP->GetShieldPct() * 100.f, PP->GetAbilityTimeLeft(),
+					(int32)PP->GetAbilityKind(), PBArtHp);
+
+				const float HpBefore = PP->GetHealthPct();
+				PP->TakeDamage(50.f, FDamageEvent(), nullptr, nullptr);
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] shield after 50 dmg: %.0f%% (of 72, expect ~31) player hp %.3f (expect unchanged)"),
+					PP->GetShieldPct() * 100.f, PP->GetHealthPct());
+				PP->TakeDamage(50.f, FDamageEvent(), nullptr, nullptr);
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] shield after 2nd 50: %.0f%% active=%d (expect 0 + 0) burst targetHp %.0f => %.0f (expect lower)"),
+					PP->GetShieldPct() * 100.f, PP->IsAbilityActive() ? 1 : 0, PBArtHp,
+					(PBArtTarget && !PBArtTarget->IsDead()) ? PBArtTarget->GetHealth() : 0.f);
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] player hp %.3f => %.3f (shield must eat all of it)"),
+					HpBefore, PP->GetHealthPct());
+			}
+			else if (PBStage == 16 && El > 0.3)
+			{
+				PBStage = 17;
+				bPBDone = true;
+				EnemySpeedMul = 1.f;   // 自检把敌人的位移冻住了，收尾必须还回去
+				// 收招后时间流速必须回到 1：漏了这条，整局敌人会永远慢半拍
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] art done: scale=%.2f (expect 1.00) active=%d"),
+					EnemyTimeScale, PP->IsAbilityActive() ? 1 : 0);
 			}
 		}
 	}
@@ -2376,6 +2531,85 @@ void AFSGameMode::Tick(float DeltaSeconds)
 				// 冷却中的 chip 应该显示秒数并把"不屈"压暗
 				FScreenshotRequest::RequestScreenshot(
 					FPaths::ProjectSavedDir() / TEXT("UndyingCd.png"), false, false);
+			}
+		}
+	}
+
+	// ---- 主动技展示（-fsart=0|1|2）：把对应流派钉成觉醒并保持满充能，
+	// 机器人一贴近就会自己放招 —— 截图核对画面、以及"真实战斗里会不会卡住"都靠它
+	{
+		static bool bArtInit = false;
+		static int32 ArtPath = -1;
+		static double ArtStart = 0.0;
+		// -fsartshot：定时刻强放一次再留两张图（开招 + 展开中），不看机器人有没有贴近
+		static bool bShot = false;
+		static bool bShotCast = false;
+		static bool bShotCap1 = false;
+		static bool bShotCap2 = false;
+		static double ShotAt = 0.0;
+		if (!bArtInit)
+		{
+			bArtInit = true;
+			ArtStart = FPlatformTime::Seconds();
+			bShot = FParse::Param(FCommandLine::Get(), TEXT("fsartshot"));
+			FString Arg;
+			if (FParse::Value(FCommandLine::Get(), TEXT("fsart="), Arg))
+			{
+				ArtPath = FMath::Clamp(FCString::Atoi(*Arg), 0, (int32)EFSPath::Count - 1);
+			}
+		}
+		if (ArtPath >= 0 && Phase == EFSPhase::Playing)
+		{
+			const double El = FPlatformTime::Seconds() - ArtStart;
+			if (AFSPlayerChar* AP = GetPlayerChar(); AP && El > 1.2)
+			{
+				const EFSPath Want = (EFSPath)ArtPath;
+				if (AP->GetAbilityKind() != FSDefs::AbilityOfPath(Want))
+				{
+					for (int32 i = 0; i < (int32)EFSPath::Count; ++i)
+					{
+						AP->DebugSetPathStacks((EFSPath)i, 0);
+					}
+					AP->DebugSetPathStacks(Want, FSDefs::PathAwakenStacks);
+					AnnouncePathAwaken(Want);
+				}
+				if (!AP->IsAbilityActive() && !AP->IsAbilityReady())
+				{
+					AP->DebugSetAbilityCharge(100.f);
+				}
+				if (bShot && !bShotCast && El > 2.2)
+				{
+					bShotCast = true;
+					AP->DebugSetAbilityCharge(100.f);
+					AP->TryAbility();
+					ShotAt = FPlatformTime::Seconds();
+					UE_LOG(LogTemp, Log, TEXT("[FSARTD] shot cast path=%d kind=%d active=%d"),
+						ArtPath, (int32)AP->GetAbilityKind(), AP->IsAbilityActive() ? 1 : 0);
+				}
+			}
+			if (bShot && ShotAt > 0.0)
+			{
+				const double Since = FPlatformTime::Seconds() - ShotAt;
+				const TCHAR* Tag = ArtPath == 0 ? TEXT("Pyre") : (ArtPath == 1 ? TEXT("Slow") : TEXT("Bulwark"));
+				if (!bShotCap1 && Since > 0.40)
+				{
+					bShotCap1 = true;
+					FScreenshotRequest::RequestScreenshot(
+						FPaths::ProjectSavedDir() / FString::Printf(TEXT("Art_%s_Cast.png"), Tag), false, false);
+				}
+				if (!bShotCap2 && Since > 1.60)
+				{
+					bShotCap2 = true;
+					if (AFSPlayerChar* SP = GetPlayerChar())
+					{
+						const FLinearColor RC = SP->DebugGetArtColor();
+						UE_LOG(LogTemp, Log, TEXT("[FSARTD] state: weather=%d artR=%.0f col=(%.2f,%.2f,%.2f) kind=%d"),
+							(int32)Weather, SP->DebugGetArtRadius(), RC.R, RC.G, RC.B,
+							(int32)SP->GetAbilityKind());
+					}
+					FScreenshotRequest::RequestScreenshot(
+						FPaths::ProjectSavedDir() / FString::Printf(TEXT("Art_%s_Hold.png"), Tag), false, false);
+				}
 			}
 		}
 	}

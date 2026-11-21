@@ -30,6 +30,41 @@ public:
 	void SetAimWorld(const FVector& In);
 	void SetFiring(bool b);
 	void TryDash();
+	/**
+	 * 流派主动技。
+	 * 充能靠"造成伤害"攒——不是冷却计时，所以它奖励的是敢打，而不是敢等。
+	 */
+	void TryAbility();
+	/** 造成伤害时回调（敌人受击处调用）。只算玩家自己打出去的那部分 */
+	void AddAbilityCharge(float DamageDealt);
+	/** 当前绑定的主动技：取流派层数最高的那条；一条都没选时为 None */
+	EFSAbility GetAbilityKind() const;
+	bool IsAbilityReady() const { return AbilityCharge >= AbilityChargeMax && !IsAbilityActive(); }
+	/** 放完后的充能冷却剩余（秒），HUD 用它解释"为什么条不涨" */
+	float GetAbilityLock() const { return AbilityLock; }
+	float GetAbilityChargePct() const { return FMath::Clamp(AbilityCharge / AbilityChargeMax, 0.f, 1.f); }
+	bool IsAbilityActive() const { return AbilityTimeLeft > 0.f; }
+	float GetAbilityTimeLeft() const { return AbilityTimeLeft; }
+	float GetAbilityPct() const;
+	/** 主动技的伤害乘区（焚场期间 > 1） */
+	float GetAbilityDmgMul() const;
+	/** 主动技的射速乘区（时缓觉醒期间 > 1） */
+	float GetAbilityRofMul() const;
+	/** 护盾剩余比例（0 = 没有护盾） */
+	float GetShieldPct() const { return ShieldHpMax > 0.f ? FMath::Clamp(ShieldHP / ShieldHpMax, 0.f, 1.f) : 0.f; }
+	bool HasShield() const { return ShieldHP > 0.f; }
+	/** 绑定主动技的那条流派是否已觉醒（决定招式强度档位） */
+	bool IsAbilityAwakened() const;
+	/** 主动技伤害窗口：敌人受击时读它，决定这次伤害要不要给充能 */
+	bool IsArtDamageLocked() const { return bArtDamageLock; }
+	/** 调试（自检 / 摆拍用）：直接把某条流派设为 N 层，并把觉醒外观刷出来 */
+	void DebugSetPathStacks(EFSPath P, int32 N);
+	// 摆拍/排查用：把脚下那个 ArtRing 的实际半径与材质颜色读回来，
+	// 免得靠截图猜"到底有没有生效"
+	float DebugGetArtRadius() const;
+	FLinearColor DebugGetArtColor() const;
+	void DebugSetAbilityCharge(float V) { AbilityCharge = FMath::Clamp(V, 0.f, AbilityChargeMax); }
+	int32 GetAbilityCasts() const { return AbilityCasts; }
 	void TakeWeapon(EFSWeapon W);
 	void Heal(float Amount);
 	void AddShake(float Amount);
@@ -110,6 +145,19 @@ protected:
 	void FireOnce();
 	void Die();
 	FVector MuzzleLocation() const;
+
+	// ---- 流派主动技
+	/** 建好三套共用的地面光环（平时全隐藏，施放时按招式调半径与颜色） */
+	void BuildAbilityFx();
+	void CastAbility(EFSAbility A);
+	/** 招式结束：收掉特效、把敌人时间流速还给世界 */
+	void EndAbility();
+	/** 每帧推进：持续时间、焚场跳伤、护盾计时 */
+	void TickAbility(float DeltaSeconds);
+	/** 护盾被打穿（或到期）时的环形爆发 */
+	void BurstShield();
+	/** 以自身为圆心的伤害判定，返回命中数 */
+	int32 DamageAroundSelf(float Radius, float Damage);
 
 	/** 觉醒后把脚下光环改色、亮出环绕碎晶；未觉醒时全隐藏 */
 	void RefreshAwakenBody();
@@ -211,6 +259,47 @@ protected:
 	float ShakeT = 0.f;
 	float HitFlash = 0.f;
 
+	// ---- 流派主动技
+	static constexpr float AbilityChargeMax = 100.f;
+	/** 每点伤害换多少充能：约 1100 点伤害充满一次 */
+	static constexpr float AbilityChargePerDamage = 0.09f;
+	/** 时缓的敌人时间流速：未觉醒 / 觉醒 */
+	static constexpr float SlowScaleBase = 0.32f;
+	static constexpr float SlowScaleAwake = 0.24f;
+	/** 焚场暗芯相对亮盘的半径比：留出的那一圈就是"火线"的宽度 */
+	static constexpr float PyreCoreMul = 0.92f;
+	/**
+	 * 放完之后的"充能冷却"：这段时间里伤害不再攒充能。
+	 * 没有它的话，伤害越高充得越快——实测后期每 8 秒就能放一次，
+	 * 3.2 秒的时缓覆盖掉四成战斗时间，"大招"直接变成常驻光环。
+	 */
+	static constexpr float AbilityLockBase = 9.0f;
+	static constexpr float AbilityLockAwake = 8.0f;
+
+	float AbilityCharge = 0.f;
+	float AbilityTimeLeft = 0.f;
+	float AbilityDuration = 1.f;
+	/** 放完后的充能冷却（秒），期间伤害不攒充能 */
+	float AbilityLock = 0.f;
+	EFSAbility ActiveAbility = EFSAbility::None;
+	/** 焚场 / 护盾的剩余量，两个招式各有解读 */
+	float ShieldHP = 0.f;
+	float ShieldHpMax = 0.f;
+	float ShieldAbsorbed = 0.f;
+	float ArtTickAcc = 0.f;      // 焚场的跳伤计时
+	float ArtPulse = 0.f;        // 特效呼吸相位
+	float ArtCastFlash = 0.f;    // 施放瞬间的闪光（HUD 用）
+	int32 AbilityCasts = 0;
+	/** 主动技自身伤害期间置位：这段时间玩家不攒充能，否则焚场会自己养自己 */
+	bool bArtDamageLock = false;
+
+	/** 招式脚下光环：外圈亮色 + 内圈暗芯夹出描边，和精英环同一套做法 */
+	UPROPERTY()
+	UStaticMeshComponent* ArtRing = nullptr;
+
+	UPROPERTY()
+	UStaticMeshComponent* ArtCore = nullptr;
+
 	FString NoticeText;
 	float NoticeTime = 0.f;
 
@@ -237,6 +326,8 @@ public:
 	void OnFireStart(const FInputActionValue& Value);
 	void OnFireStop(const FInputActionValue& Value);
 	void OnDash(const FInputActionValue& Value);
+	/** 流派主动技：Q / 右键 / 手柄 Y */
+	void OnAbility(const FInputActionValue& Value);
 	void OnConfirm(const FInputActionValue& Value);
 	/** 通关后按 E：不进新局，接着打无尽。只在 Victory 阶段有效 */
 	void OnEndless(const FInputActionValue& Value);
@@ -261,6 +352,9 @@ protected:
 
 	UPROPERTY()
 	UInputAction* IA_Dash = nullptr;
+
+	UPROPERTY()
+	UInputAction* IA_Ability = nullptr;
 
 	UPROPERTY()
 	UInputAction* IA_Endless = nullptr;

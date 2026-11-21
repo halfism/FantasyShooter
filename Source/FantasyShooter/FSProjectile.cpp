@@ -3,6 +3,7 @@
 #include "FSFx.h"
 #include "FSEnemy.h"
 #include "FSPlayer.h"
+#include "FSGameMode.h"
 #include "Components/StaticMeshComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/World.h"
@@ -63,6 +64,19 @@ void AFSProjectile::Tick(float DeltaSeconds)
 	if (!bLaunched && Dir.SizeSquared() > 0.f)
 	{
 		bLaunched = true;
+	}
+
+	// 时缓：敌人的弹幕也要一起慢下来，否则"时间变慢"只慢了走位、没慢到躲弹，
+	// 这招最值钱的那部分（在弹幕缝里穿过去）就等于没做
+	if (bEnemyOwned)
+	{
+		if (const AFSGameMode* GM = AFSGameMode::Get(this))
+		{
+			if (GM->EnemyTimeScale < 0.999f)
+			{
+				DeltaSeconds *= GM->EnemyTimeScale;
+			}
+		}
 	}
 
 	const FVector Prev = GetActorLocation();

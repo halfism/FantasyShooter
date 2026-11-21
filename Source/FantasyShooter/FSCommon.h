@@ -124,6 +124,25 @@ enum class EFSElite : uint8
 	Count
 };
 
+/**
+ * 流派主动技：一键、充能制。
+ *
+ * 存在的意义不是"多一个技能"，而是让「流派」第一次体现在手上：
+ * 未觉醒时是个保命的工具，觉醒后才变成能解局的招——
+ * 三系的差别因此从 HUD 上的数字变成"按下去发生什么"。
+ *
+ * 顺序必须和 EFSPath 一一对应（None=0，之后 +1），选招时直接按流派下标换算。
+ */
+UENUM()
+enum class EFSAbility : uint8
+{
+	None,
+	Pyre,       // 烈焰·焚场：脚下烧一圈持续伤害，期间自己输出也更高
+	SlowTime,   // 疾影·时缓：全场敌人放慢，自己不变——连震波与弹幕都变慢
+	Bulwark,    // 壁垒·壁垒降临：护盾吸收伤害，碎时炸成环形爆发
+	Count
+};
+
 struct FFSWeaponDef
 {
 	const TCHAR* NameCN = TEXT("");
@@ -198,6 +217,17 @@ namespace FSDefs
 
 	/** 流派觉醒需要累计的层数 */
 	static constexpr int32 PathAwakenStacks = 3;
+
+	// ---- 流派主动技
+	/** 主动技所属的流派（None 返回 Fury 占位，调用方不该对 None 取色） */
+	EFSPath AbilityPath(EFSAbility A);
+	/** 由流派下标直接换算成主动技（0/1/2 → Pyre/SlowTime/Bulwark） */
+	EFSAbility AbilityOfPath(EFSPath P);
+	const TCHAR* AbilityNameCN(EFSAbility A);
+	const TCHAR* AbilityNameEN(EFSAbility A);
+	/** 未觉醒形态的一句话说明（HUD 悬停 / 日志用） */
+	const TCHAR* AbilityDescCN(EFSAbility A, bool bAwakened);
+	const TCHAR* AbilityDescEN(EFSAbility A, bool bAwakened);
 
 	// ---- 精英词缀
 	const TCHAR* EliteNameCN(EFSElite E);

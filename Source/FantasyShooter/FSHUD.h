@@ -37,6 +37,8 @@ protected:
 	void DrawSaveFlash(float U, float A);
 	/** 准星外的残影射速环：Pct 是剩余时间比例（1 → 0） */
 	void DrawSurgeArc(float CX, float CY, float Pct, float U);
+	/** 底部中间：流派主动技的充能条 / 剩余时间 */
+	void DrawAbilityBar(AFSPlayerChar* P, float U);
 	/** 右下角战场雷达：以玩家为中心，显示敌人与掉落 */
 	void DrawRadar(AFSGameMode* GM, AFSPlayerChar* P, float U);
 	/** 贴身的、还在屏幕外的敌人 → 屏幕边缘红色箭头 */

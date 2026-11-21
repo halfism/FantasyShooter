@@ -17,6 +17,8 @@
 #include "InputAction.h"
 #include "InputModifiers.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/DamageEvents.h"
+#include "EngineUtils.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/CommandLine.h"
 
@@ -206,6 +208,9 @@ void AFSPlayerChar::BuildBody()
 	GunMesh = Add(TEXT("Cube"), FVector(30.f, 30.f, 16.f), FVector(0.62f, 0.15f, 0.15f), FLinearColor(0.20f, 0.22f, 0.28f));
 	Add(TEXT("Cube"), FVector(62.f, 30.f, 16.f), FVector(0.22f, 0.09f, 0.09f), FSPal::Gold, true, 1.3f);
 	Add(TEXT("Cube"), FVector(22.f, 30.f, 22.f), FVector(0.16f, 0.11f, 0.10f), FLinearColor(0.14f, 0.15f, 0.19f));
+
+	// 主动技的地面光环：平时全隐藏，施放时才亮出来
+	BuildAbilityFx();
 }
 
 FVector AFSPlayerChar::MuzzleLocation() const
@@ -258,6 +263,444 @@ void AFSPlayerChar::TryDash()
 	AFSFx::Shock(GetWorld(), GetActorLocation() - FVector(0.f, 0.f, 84.f), 220.f, FSPal::Cyan, 0.35f);
 	FSAudio::Play(this, EFSSfx::Dash, GetActorLocation(), 1.0f);
 	AddShake(3.f);
+}
+
+// ------------------------------------------------------------------ 流派主动技
+
+int32 AFSPlayerChar::DamageAroundSelf(float Radius, float Damage)
+{
+	UWorld* W = GetWorld();
+	if (!W)
+	{
+		return 0;
+	}
+
+	// 先把目标收进数组再逐个结算：TakeDamage 可能直接打死敌人并触发分裂 / 掉落，
+	// 边迭代 TActorIterator 边销毁是自找麻烦。
+	TArray<AFSEnemy*> Targets;
+	for (TActorIterator<AFSEnemy> It(W); It; ++It)
+	{
+		AFSEnemy* E = *It;
+		if (!E || E->IsDead())
+		{
+			continue;
+		}
+		// 判定要算上体型：大块头压着半边身子站在圈边上，不能因为圆心远就放过
+		const float D = FVector::Dist2D(E->GetActorLocation(), GetActorLocation());
+		if (D - E->GetRadius() <= Radius)
+		{
+			Targets.Add(E);
+		}
+	}
+
+	// 自己的招式不给自己充能：否则焚场一边烧一边攒，下一发就白送了
+	bArtDamageLock = true;
+	int32 Hits = 0;
+	for (AFSEnemy* E : Targets)
+	{
+		if (!IsValid(E) || E->IsDead())
+		{
+			continue;
+		}
+		const float D = FVector::Dist2D(E->GetActorLocation(), GetActorLocation());
+		const float Falloff = FMath::Clamp(1.f - (D / FMath::Max(Radius, 1.f)) * 0.55f, 0.45f, 1.f);
+		E->TakeDamage(Damage * Falloff, FDamageEvent(), nullptr, this);
+		++Hits;
+	}
+	bArtDamageLock = false;
+	return Hits;
+}
+
+EFSAbility AFSPlayerChar::GetAbilityKind() const
+{
+	// 取"叠得最多"的那条流派。平手时按 Fury→Swift→Ward 的固定顺序，
+	// 所以同一套赐福组合永远绑同一个招，不会因为选卡先后摇摆。
+	int32 Best = -1;
+	int32 BestSt = 0;
+	for (int32 i = 0; i < (int32)EFSPath::Count; ++i)
+	{
+		if (PathStacks[i] > BestSt)
+		{
+			BestSt = PathStacks[i];
+			Best = i;
+		}
+	}
+	return (Best < 0) ? EFSAbility::None : FSDefs::AbilityOfPath((EFSPath)Best);
+}
+
+bool AFSPlayerChar::IsAbilityAwakened() const
+{
+	const EFSAbility A = (ActiveAbility != EFSAbility::None) ? ActiveAbility : GetAbilityKind();
+	return (A != EFSAbility::None) && IsPathAwakened(FSDefs::AbilityPath(A));
+}
+
+void AFSPlayerChar::DebugSetPathStacks(EFSPath P, int32 N)
+{
+	const int32 I = (int32)P;
+	if (I < 0 || I >= (int32)EFSPath::Count)
+	{
+		return;
+	}
+	PathStacks[I] = FMath::Clamp(N, 0, 9);
+	if (PathStacks[I] >= FSDefs::PathAwakenStacks && AwakenPath < 0)
+	{
+		AwakenPath = I;
+	}
+	RefreshAwakenBody();
+}
+
+float AFSPlayerChar::GetAbilityPct() const
+{
+	// 一个函数喂一条进度条：没放的时候显示"攒了多少"，放出去了显示"还剩多久"。
+	// 两段语义不同但位置相同，玩家不需要再学第二种读法。
+	if (AbilityTimeLeft > 0.f)
+	{
+		return FMath::Clamp(AbilityTimeLeft / FMath::Max(AbilityDuration, 0.01f), 0.f, 1.f);
+	}
+	return GetAbilityChargePct();
+}
+
+float AFSPlayerChar::GetAbilityDmgMul() const
+{
+	if (AbilityTimeLeft <= 0.f || ActiveAbility != EFSAbility::Pyre)
+	{
+		return 1.f;
+	}
+	return IsAbilityAwakened() ? 1.15f : 1.10f;
+}
+
+float AFSPlayerChar::GetAbilityRofMul() const
+{
+	// 时缓觉醒额外给射速：敌人慢了、自己更快，"时间差"才真的变成输出窗口
+	if (AbilityTimeLeft <= 0.f || ActiveAbility != EFSAbility::SlowTime || !IsAbilityAwakened())
+	{
+		return 1.f;
+	}
+	return 1.20f;
+}
+
+void AFSPlayerChar::AddAbilityCharge(float DamageDealt)
+{
+	if (!IsAlive() || DamageDealt <= 0.f || AbilityCharge >= AbilityChargeMax)
+	{
+		return;
+	}
+	// 招式进行中与充能冷却期都不攒条。
+	// 只卡冷却不够——焚场有 4.4 秒，这期间照常开火就足够把条重新充满，
+	// 结果是"招一结束立刻再放一次"，冷却形同摆设。
+	if (AbilityLock > 0.f || IsAbilityActive())
+	{
+		return;
+	}
+	// 觉醒后充得更快：大招既然变成"能解局的招"，就该更常驻在手边
+	const float Gain = DamageDealt * AbilityChargePerDamage * (IsAbilityAwakened() ? 1.25f : 1.f);
+	AbilityCharge = FMath::Min(AbilityChargeMax, AbilityCharge + Gain);
+}
+
+float AFSPlayerChar::DebugGetArtRadius() const
+{
+	// Cylinder 原始半径 50，缩放 X 乘回去就是世界半径
+	return ArtRing ? ArtRing->GetRelativeScale3D().X * 50.f : 0.f;
+}
+
+FLinearColor AFSPlayerChar::DebugGetArtColor() const
+{
+	FLinearColor Out(0.f, 0.f, 0.f, 1.f);
+	if (ArtRing)
+	{
+		if (UMaterialInstanceDynamic* M = Cast<UMaterialInstanceDynamic>(ArtRing->GetMaterial(0)))
+		{
+			M->GetVectorParameterValue(TEXT("Color"), Out);
+		}
+	}
+	return Out;
+}
+
+void AFSPlayerChar::BuildAbilityFx(){
+	// 主动技是"正在发生的事"，必须压在所有常驻光环之上：觉醒外圈在 G+1.2、
+	// 内层掏空的暗盘在 G+3.0，ArtRing 放在 0.8 会被它们整个盖住（壁垒环 128uu
+	// 正好落在 HaloInner 的 134uu 以内，实测一寸都看不见）。
+	const float G = -92.f;
+	ArtRing = FSUtil::AddShape(this, GetCapsuleComponent(), TEXT("Cylinder"),
+		FVector(0.f, 0.f, G + 3.6f), FVector(1.f, 1.f, 0.02f),
+		FLinearColor(0.20f, 0.20f, 0.20f), true, 0.85f);
+	ArtCore = FSUtil::AddShape(this, GetCapsuleComponent(), TEXT("Cylinder"),
+		FVector(0.f, 0.f, G + 4.2f), FVector(0.94f, 0.94f, 0.02f),
+		FLinearColor(0.012f, 0.014f, 0.020f), true, 0.90f);
+	if (ArtRing) { ArtRing->SetVisibility(false, true); }
+	if (ArtCore) { ArtCore->SetVisibility(false, true); }
+}
+
+void AFSPlayerChar::TryAbility()
+{
+	if (!IsAlive() || IsAbilityActive())
+	{
+		return;
+	}
+
+	const EFSAbility A = GetAbilityKind();
+	if (A == EFSAbility::None)
+	{
+		// 前两波还没选流派：这一按不能说"没反应"，否则玩家会以为是键坏了
+		AddNotice(FSUtil::L(TEXT("先选一条流派，才会得到对应的主动技"),
+			TEXT("PICK A PATH TO BIND AN ART")), 1.8f);
+		FSAudio::Play2D(this, EFSSfx::Beep, 0.45f);
+		return;
+	}
+	if (AbilityCharge < AbilityChargeMax)
+	{
+		FSAudio::Play2D(this, EFSSfx::Beep, 0.30f);
+		return;
+	}
+
+	CastAbility(A);
+}
+
+void AFSPlayerChar::CastAbility(EFSAbility A)
+{
+	const EFSPath Path = FSDefs::AbilityPath(A);
+	const bool bAwe = IsPathAwakened(Path);
+	const FLinearColor Col = FSDefs::PathColor(Path);
+
+	ActiveAbility = A;
+	AbilityCharge = 0.f;
+	ArtTickAcc = 0.f;
+	ArtPulse = 0.f;
+	ArtCastFlash = 1.f;
+	++AbilityCasts;
+	ShieldHP = 0.f;
+	ShieldHpMax = 0.f;
+	ShieldAbsorbed = 0.f;
+
+	float RingR = 0.f;
+	FLinearColor RingCol = Col;
+	float CoreMul = 0.94f;
+	FLinearColor CoreCol(0.012f, 0.014f, 0.020f);
+	float RingGlow = 0.95f;
+
+	switch (A)
+	{
+	case EFSAbility::Pyre:
+		AbilityDuration = bAwe ? 4.4f : 3.6f;
+		// 半径刻意收得比"看上去够大"小一档：520 的实心盘会把整个战场铺成一张砖红色地板，
+		// 敌人、地面网格、掉落全糊在一起。340 已经足够罩住贴身的一圈敌人。
+		RingR = bAwe ? 410.f : 340.f;
+		// 内圈只是"被烧黑的地面"，不是第二个发光体：亮的是边缘那一圈。
+		// 数值必须压到接近黑——M_Glow 是自发光，线性 0.12 在 sRGB 下已经是砖红色，
+		// 0.16 倍整片会渲染成一块实心红地板，把敌人和地面网格全糊掉。
+		CoreMul = PyreCoreMul;
+		CoreCol = FLinearColor(0.030f, 0.012f, 0.007f);
+		// 火线用偏橙的红，而不是流派那个偏粉的珊瑚色：后者一亮就被泛光冲成米白，
+		// 看着像一根奶油绳子。强度也压在 0.85——暗场里 1.0 以上就留不住色相。
+		RingCol = FLinearColor(1.00f, 0.33f, 0.10f);
+		RingGlow = 0.85f;
+		break;
+	case EFSAbility::SlowTime:
+		AbilityDuration = bAwe ? 3.2f : 2.4f;
+		// 时缓没有地面范围可言：它是全场的时间改动，画个圈反而骗人
+		RingR = 0.f;
+		// 施放的这一帧就生效：等下一次 Tick 才慢下来，手感上"按了没反应"
+		if (AFSGameMode* GM = AFSGameMode::Get(this))
+		{
+			GM->EnemyTimeScale = bAwe ? SlowScaleAwake : SlowScaleBase;
+		}
+		break;
+	case EFSAbility::Bulwark:
+		AbilityDuration = bAwe ? 7.5f : 6.0f;
+		// 半径必须明显小于觉醒光环（178uu）：176 会正好和它重合，青+绿叠成一圈
+		// 说不清颜色的钢青色，护盾的"绿"就没了。收到贴身尺寸反而更像"裹在身上的一层壳"。
+		RingR = bAwe ? 130.f : 112.f;
+		// ArtRing 是实心圆柱，"环"靠 ArtCore 压在上面露出的边缘。0.94 的差值在
+		// 半径 130 时只剩 8uu（屏幕上一根发丝），所以壁垒单独把边带加厚到 20%。
+		CoreMul = 0.80f;
+		ShieldHpMax = bAwe ? 72.f : 45.f;
+		ShieldHP = ShieldHpMax;
+		// 绿色抬到 1.15 会直接冲成白圈，和"护盾"这个色相脱钩（和精英环同一条经验：
+		// 暗场里自发光一过 1.0 就留不住色相）。
+		// 注意：竞技场主题是随机的，熔岩裂谷（-fsmap=2）的暖橙地面会把绿环压成土黄，
+		// 想核对护盾的绿色必须用 -fsmap=0 的幽蓝竞技场。
+		RingGlow = 0.75f;
+		break;
+	default:
+		return;
+	}
+
+	AbilityTimeLeft = AbilityDuration;
+
+	if (RingR > 0.f)
+	{
+		if (ArtRing)
+		{
+			FSUtil::SetShapeColor(ArtRing, RingCol, RingGlow);
+			ArtRing->SetRelativeScale3D(FVector(RingR / 50.f, RingR / 50.f, 0.02f));
+			ArtRing->SetVisibility(true, true);
+		}
+		if (ArtCore)
+		{
+			FSUtil::SetShapeColor(ArtCore, CoreCol, 0.75f);
+			ArtCore->SetRelativeScale3D(FVector(RingR * CoreMul / 50.f, RingR * CoreMul / 50.f, 0.02f));
+			ArtCore->SetVisibility(true, true);
+		}
+	}
+
+	// 施放反馈：一圈冲击 + 一次顿帧。三招共用，玩家只需要学会"按下去世界动一下"
+	AFSFx::Shock(GetWorld(), GetActorLocation() - FVector(0.f, 0.f, 84.f),
+		A == EFSAbility::Pyre ? RingR : 320.f, Col, 0.55f, 1.25f);
+	AFSFx::Burst(GetWorld(), GetActorLocation() + FVector(0.f, 0.f, 40.f), 240.f, Col, 0.32f);
+	FSAudio::Play(this, EFSSfx::Upgrade, GetActorLocation(), 1.35f,
+		A == EFSAbility::Pyre ? 0.72f : (A == EFSAbility::SlowTime ? 0.86f : 0.62f));
+	AddShake(12.f);
+
+	if (AFSGameMode* GM = AFSGameMode::Get(this))
+	{
+		GM->RequestHitStop(0.18f, 0.07f);
+	}
+
+	AddNotice(FString::Printf(TEXT("%s%s"),
+		FSUtil::L(FSDefs::AbilityNameCN(A), FSDefs::AbilityNameEN(A)),
+		bAwe ? FSUtil::L(TEXT("  ·  觉醒"), TEXT("  -  AWAKENED")) : TEXT("")), 2.2f);
+
+	UE_LOG(LogTemp, Log, TEXT("[FSART] cast kind=%d awakened=%d dur=%.1f path=%d"),
+		(int32)A, bAwe ? 1 : 0, AbilityDuration, (int32)Path);
+}
+
+void AFSPlayerChar::EndAbility()
+{
+	const EFSAbility A = ActiveAbility;
+	ActiveAbility = EFSAbility::None;
+	AbilityTimeLeft = 0.f;
+	ArtTickAcc = 0.f;
+
+	// 充能冷却从"招式结束"开始算，而不是从施放算：否则壁垒降临（7.5 秒）
+	// 会把冷却整段吃掉，一个 8 秒的盾等于没有冷却
+	if (A != EFSAbility::None)
+	{
+		AbilityLock = IsPathAwakened(FSDefs::AbilityPath(A)) ? AbilityLockAwake : AbilityLockBase;
+	}
+
+	if (ArtRing) { ArtRing->SetVisibility(false, true); }
+	if (ArtCore) { ArtCore->SetVisibility(false, true); }
+
+	// 时间流速必须无条件还回去：不管是到期、被打断还是玩家阵亡，
+	// 任何一条漏掉都会让整局敌人永远慢半拍
+	if (AFSGameMode* GM = AFSGameMode::Get(this))
+	{
+		GM->EnemyTimeScale = 1.f;
+	}
+
+	// 护盾到期同样炸：否则玩家会学"等它自己没"而不是"用满再换"
+	if (A == EFSAbility::Bulwark)
+	{
+		BurstShield();
+	}
+	ShieldHP = 0.f;
+	ShieldHpMax = 0.f;
+	ShieldAbsorbed = 0.f;
+}
+
+void AFSPlayerChar::BurstShield()
+{
+	const bool bAwe = IsPathAwakened(EFSPath::Ward);
+	const float R = bAwe ? 460.f : 380.f;
+	// 吸收量直接进伤害：顶住多少就还多少，玩家不需要记第二套换算
+	const float Dmg = 22.f + ShieldAbsorbed * 0.9f;
+
+	const int32 Hits = DamageAroundSelf(R, Dmg);
+
+	AFSFx::Shock(GetWorld(), GetActorLocation() - FVector(0.f, 0.f, 84.f), R, FSPal::Green, 0.55f, 1.2f);
+	AFSFx::Burst(GetWorld(), GetActorLocation() + FVector(0.f, 0.f, 60.f), R * 0.5f, FSPal::Green, 0.34f);
+	FSAudio::Play(this, EFSSfx::ShotHeavy, GetActorLocation(), 1.15f, 0.68f);
+	AddShake(9.f);
+
+	UE_LOG(LogTemp, Log, TEXT("[FSART] bulwark burst absorbed=%.1f dmg=%.1f radius=%.0f hits=%d"),
+		ShieldAbsorbed, Dmg, R, Hits);
+}
+
+void AFSPlayerChar::TickAbility(float DeltaSeconds)
+{
+	ArtCastFlash = FMath::Max(0.f, ArtCastFlash - DeltaSeconds * 2.2f);
+	AbilityLock = FMath::Max(0.f, AbilityLock - DeltaSeconds);
+
+	if (AbilityTimeLeft <= 0.f)
+	{
+		return;
+	}
+
+	AbilityTimeLeft -= DeltaSeconds;
+	if (AbilityTimeLeft <= 0.f)
+	{
+		EndAbility();
+		return;
+	}
+
+	ArtPulse += DeltaSeconds;
+
+	if (ActiveAbility == EFSAbility::Pyre)
+	{
+		const bool bAwe = IsPathAwakened(EFSPath::Fury);
+		const float R = bAwe ? 410.f : 340.f;
+		// 呼吸幅度很小、频率偏快：幅度大了像在伸缩的橡皮圈，太快又像故障
+		const float Breath = 1.f + FMath::Sin(ArtPulse * 5.2f) * 0.035f;
+		if (ArtRing)
+		{
+			ArtRing->SetRelativeScale3D(FVector(R * Breath / 50.f, R * Breath / 50.f, 0.02f));
+		}
+		if (ArtCore)
+		{
+			ArtCore->SetRelativeScale3D(FVector(R * PyreCoreMul * Breath / 50.f, R * PyreCoreMul * Breath / 50.f, 0.02f));
+		}
+
+		ArtTickAcc += DeltaSeconds;
+		if (ArtTickAcc >= 0.4f)
+		{
+			ArtTickAcc -= 0.4f;
+			const float Dmg = bAwe ? 40.f : 26.f;
+			const int32 N = DamageAroundSelf(R, Dmg);
+
+			// 火线上随机冒一小簇火：静止的圆环看着像贴图，
+			// 有东西在边缘跳才像"这一圈正在烧"。位置取环上随机角度，规模压小，别糊住敌人
+			{
+				const float A = FMath::FRandRange(0.f, 2.f * PI);
+				const FVector Puff = GetActorLocation()
+					+ FVector(FMath::Cos(A), FMath::Sin(A), 0.f) * R * 0.94f
+					+ FVector(0.f, 0.f, -56.f);
+				AFSFx::Burst(GetWorld(), Puff, 58.f, FLinearColor(1.f, 0.46f, 0.12f), 0.22f);
+			}
+			// 命中时脚下再亮一下：区分"烧到人"和"空烧"
+			if (N > 0)
+			{
+				AFSFx::Burst(GetWorld(), GetActorLocation() + FVector(0.f, 0.f, -50.f),
+					150.f, FLinearColor(1.f, 0.58f, 0.18f), 0.15f);
+			}
+		}
+	}
+	else if (ActiveAbility == EFSAbility::SlowTime)
+	{
+		// 每帧重写而不是"进出来回设一次"：中途被暂停 / 顿帧 / 重开都不会留下错的值
+		if (AFSGameMode* GM = AFSGameMode::Get(this))
+		{
+			GM->EnemyTimeScale = IsPathAwakened(EFSPath::Swift) ? SlowScaleAwake : SlowScaleBase;
+		}
+	}
+	else if (ActiveAbility == EFSAbility::Bulwark)
+	{
+		// 护盾越薄环越暗：不用血条也能看出"这层壳快没了"
+		const float K = 0.30f + 0.70f * GetShieldPct();
+		const float Pulse = 1.f + FMath::Sin(ArtPulse * 8.f) * 0.04f;
+		const float BaseR = IsPathAwakened(EFSPath::Ward) ? 130.f : 112.f;
+		if (ArtRing)
+		{
+			// 强度压在 0.75：这个材质是纯自发光，暗场里超过 1.0 会被夹成白圈
+			FSUtil::SetShapeColor(ArtRing, FSPal::Green * K, 0.75f);
+			ArtRing->SetRelativeScale3D(FVector(BaseR * Pulse / 50.f, BaseR * Pulse / 50.f, 0.02f));
+		}
+		if (ArtCore)
+		{
+			// 内盘是"壳里面"，不是第二个发光体：染一层极暗的绿，让护盾看起来有体积
+			FSUtil::SetShapeColor(ArtCore, FLinearColor(0.012f, 0.028f, 0.018f), 0.55f);
+			ArtCore->SetRelativeScale3D(FVector(BaseR * 0.80f * Pulse / 50.f, BaseR * 0.80f * Pulse / 50.f, 0.02f));
+		}
+	}
 }
 
 void AFSPlayerChar::TakeWeapon(EFSWeapon W)
@@ -579,8 +1022,9 @@ void AFSPlayerChar::TickSurgeRing()
 
 void AFSPlayerChar::FireOnce()
 {	const FFSWeaponDef& W = FSDefs::Weapon(Weapon);
-	const float DmgMul = (1.f + (WeaponLevel - 1) * 0.17f) * UpDmg;
-	float RofMul = (1.f + (WeaponLevel - 1) * 0.07f) * UpRof;
+	// 主动技的乘区接在这里：焚场期间自己打得更重，时缓觉醒期间打得更快
+	const float DmgMul = (1.f + (WeaponLevel - 1) * 0.17f) * UpDmg * GetAbilityDmgMul();
+	float RofMul = (1.f + (WeaponLevel - 1) * 0.07f) * UpRof * GetAbilityRofMul();
 
 	// 疾影觉醒「残影」：刚闪避完的 0.8 秒里射速狂飙，鼓励"贴脸闪避接输出"
 	if (DashSurge > 0.f)
@@ -720,6 +1164,7 @@ void AFSPlayerChar::Tick(float DeltaSeconds)
 	}
 	TickAwakenBody(DeltaSeconds);
 	TickSurgeRing();
+	TickAbility(DeltaSeconds);
 
 	// 自动演示模式
 	if (bBot)
@@ -764,6 +1209,12 @@ void AFSPlayerChar::Tick(float DeltaSeconds)
 				Wish.Normalize();
 				MoveInput = FVector2D(Wish.X, Wish.Y);
 				bFiring = true;
+
+				// 机器人也会放招：自动化跑图时，这一条是"招式在真实战斗里跑得通"的唯一证据
+				if (IsAbilityReady() && BestD < 820.f)
+				{
+					TryAbility();
+				}
 			}
 			else
 			{
@@ -838,6 +1289,30 @@ float AFSPlayerChar::TakeDamage(float DamageAmount, FDamageEvent const& DamageEv
 	// 护壁：受到的伤害走乘区（下限 0.60 倍）
 	const float Mitigated = DamageAmount * DmgTakenScale;
 
+	// 壁垒降临：护盾先吃，吃到穿为止。
+	// 吸收量记下来算爆发伤害——"顶住多少就还多少"是一条规则，
+	// 玩家不需要另外记"护盾爆了会炸多痛"。
+	if (ShieldHP > 0.f)
+	{
+		const float Abs = FMath::Min(ShieldHP, Mitigated);
+		ShieldHP -= Abs;
+		ShieldAbsorbed += Abs;
+		HitFlash = FMath::Max(HitFlash, 0.12f);
+		AddShake(4.f);
+
+		// 吃伤害时环闪一下：不然"被盾吃掉"和"没打中"看起来一样
+		if (ArtRing)
+		{
+			FSUtil::SetShapeColor(ArtRing, FLinearColor(0.82f, 1.00f, 0.88f), 2.0f);
+		}
+
+		if (ShieldHP <= 0.f)
+		{
+			EndAbility();   // 内部会调 BurstShield，把吸收量炸出去
+		}
+		return Abs;
+	}
+
 	// 壁垒觉醒「不屈」：每 45 秒能把一次致命伤挡成 1 点血。
 	// 放在扣血之前判定，所以是真"免死"而不是"死了再拉起来"。
 	if (HP - Mitigated <= 0.f && DeathSaveCd <= 0.f && IsPathAwakened(EFSPath::Ward))
@@ -896,6 +1371,14 @@ void AFSPlayerChar::Die()
 	}
 	bAlive = false;
 	bFiring = false;
+
+	// 死了先把招收掉：时缓还在跑的话，整局敌人会永远慢半拍，
+	// 结算画面后面站着一群以 0.24 倍速挪动的怪，非常出戏
+	if (IsAbilityActive())
+	{
+		EndAbility();
+	}
+	AbilityCharge = 0.f;
 
 	AFSFx::Burst(GetWorld(), GetActorLocation(), 420.f, FSPal::Danger, 0.55f);
 	AFSFx::Shock(GetWorld(), GetActorLocation() - FVector(0.f, 0.f, 84.f), 700.f, FSPal::Danger, 0.7f);
@@ -1005,6 +1488,14 @@ void AFSPlayerController::EnsureInput()
 	IMC->MapKey(IA_Dash, EKeys::Gamepad_FaceButton_Bottom);
 	IMC->MapKey(IA_Dash, EKeys::Gamepad_LeftShoulder);
 
+	// 流派主动技：Q / 右键。右键不占用开火（开火只有左键），
+	// 所以"一手射击一手放招"是同时成立的，不用切手指
+	IA_Ability = NewObject<UInputAction>(this, TEXT("IA_Ability"));
+	IA_Ability->ValueType = EInputActionValueType::Boolean;
+	IMC->MapKey(IA_Ability, EKeys::Q);
+	IMC->MapKey(IA_Ability, EKeys::RightMouseButton);
+	IMC->MapKey(IA_Ability, EKeys::Gamepad_FaceButton_Top);
+
 	IA_Confirm = NewObject<UInputAction>(this, TEXT("IA_Confirm"));
 	IA_Confirm->ValueType = EInputActionValueType::Boolean;
 	IMC->MapKey(IA_Confirm, EKeys::R);
@@ -1059,6 +1550,7 @@ void AFSPlayerController::SetupInputComponent()
 	EIC->BindAction(IA_Fire, ETriggerEvent::Started, this, &AFSPlayerController::OnFireStart);
 	EIC->BindAction(IA_Fire, ETriggerEvent::Completed, this, &AFSPlayerController::OnFireStop);
 	EIC->BindAction(IA_Dash, ETriggerEvent::Started, this, &AFSPlayerController::OnDash);
+	EIC->BindAction(IA_Ability, ETriggerEvent::Started, this, &AFSPlayerController::OnAbility);
 	EIC->BindAction(IA_Confirm, ETriggerEvent::Started, this, &AFSPlayerController::OnConfirm);
 	EIC->BindAction(IA_Endless, ETriggerEvent::Started, this, &AFSPlayerController::OnEndless);
 }
@@ -1133,6 +1625,22 @@ void AFSPlayerController::OnDash(const FInputActionValue& Value)
 	if (AFSPlayerChar* C = GetChar())
 	{
 		C->TryDash();
+	}
+}
+
+void AFSPlayerController::OnAbility(const FInputActionValue& Value)
+{
+	if (AFSGameMode* GM = AFSGameMode::Get(this))
+	{
+		// 暂停、结算、选卡时一律不响应：放招不该能在菜单里偷跑
+		if (GM->Phase != EFSPhase::Playing || GM->bPaused || GM->bChoosing)
+		{
+			return;
+		}
+	}
+	if (AFSPlayerChar* C = GetChar())
+	{
+		C->TryAbility();
 	}
 }
 

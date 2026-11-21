@@ -292,6 +292,93 @@ namespace FSDefs
 		}
 	}
 
+	// ------------------------------------------------------------------ 流派主动技
+
+	EFSAbility AbilityOfPath(EFSPath P)
+	{
+		// 枚举顺序刻意对齐：Pyre/SlowTime/Bulwark 紧跟在 None 后面
+		const int32 I = (int32)P;
+		if (I < 0 || I >= (int32)EFSPath::Count)
+		{
+			return EFSAbility::None;
+		}
+		return (EFSAbility)(I + 1);
+	}
+
+	EFSPath AbilityPath(EFSAbility A)
+	{
+		const int32 I = (int32)A - 1;
+		if (I < 0 || I >= (int32)EFSPath::Count)
+		{
+			return EFSPath::Fury;
+		}
+		return (EFSPath)I;
+	}
+
+	const TCHAR* AbilityNameCN(EFSAbility A)
+	{
+		switch (A)
+		{
+		case EFSAbility::Pyre:     return TEXT("焚  场");
+		case EFSAbility::SlowTime: return TEXT("时  缓");
+		case EFSAbility::Bulwark:  return TEXT("壁 垒 降 临");
+		default:                   return TEXT("未 定");
+		}
+	}
+
+	const TCHAR* AbilityNameEN(EFSAbility A)
+	{
+		switch (A)
+		{
+		case EFSAbility::Pyre:     return TEXT("PYRE");
+		case EFSAbility::SlowTime: return TEXT("SLOW TIME");
+		case EFSAbility::Bulwark:  return TEXT("BULWARK");
+		default:                   return TEXT("UNBOUND");
+		}
+	}
+
+	const TCHAR* AbilityDescCN(EFSAbility A, bool bAwakened)
+	{
+		switch (A)
+		{
+		case EFSAbility::Pyre:
+			return bAwakened
+				? TEXT("脚下焚场更大更烫，期间自身伤害 +15%")
+				: TEXT("脚下烧出焚场，期间自身伤害 +10%");
+		case EFSAbility::SlowTime:
+			return bAwakened
+				? TEXT("敌人 0.24 倍速 3.2 秒，期间自己射速 +20%")
+				: TEXT("敌人 0.32 倍速 2.4 秒，自己不受影响");
+		case EFSAbility::Bulwark:
+			return bAwakened
+				? TEXT("护盾吸 72 点，破碎时炸开一圈")
+				: TEXT("护盾吸 45 点，破碎时炸开一圈");
+		default:
+			return TEXT("先选一条流派，才会得到对应的主动技");
+		}
+	}
+
+	const TCHAR* AbilityDescEN(EFSAbility A, bool bAwakened)
+	{
+		switch (A)
+		{
+		case EFSAbility::Pyre:
+			return bAwakened
+				? TEXT("Bigger, hotter pyre - +15% damage while burning")
+				: TEXT("Burn the ground - +10% damage while it lasts");
+		case EFSAbility::SlowTime:
+			return bAwakened
+				? TEXT("Enemies at 0.24x for 3.2s - your fire rate +20%")
+				: TEXT("Enemies at 0.32x for 2.4s - you are unaffected");
+		case EFSAbility::Bulwark:
+			return bAwakened
+				? TEXT("Shield absorbs 72, bursts when broken")
+				: TEXT("Shield absorbs 45, bursts when broken");
+		default:
+			return TEXT("Pick a path first to bind an art");
+		}
+	}
+
 	// ------------------------------------------------------------------ 精英词缀
 
 	const TCHAR* EliteNameCN(EFSElite E)

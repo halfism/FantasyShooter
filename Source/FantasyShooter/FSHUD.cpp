@@ -212,6 +212,29 @@ void AFSHUD::DrawPlaying(AFSGameMode* GM, AFSPlayerChar* P, float U)
 {
 	const float M = 28.f * U;
 
+	// 时缓：只在四边压一圈冷青，不动画面中央。必须画在所有 HUD 之前——
+	// 放在后面会把左上角的数据条和底部血条一起压暗。
+	// 试过整屏一层淡青，结果是"世界被冲成奶蓝色"——战场本来就极暗，
+	// 哪怕 5% 的亮色叠加也足以把地面网格和敌人一起洗白。边框足够表达"世界状态变了"。
+	if (P->IsAbilityActive() && P->GetAbilityKind() == EFSAbility::SlowTime)
+	{
+		const float T = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+		const float A = 0.26f + 0.08f * FMath::Sin(T * 3.2f);
+		const FLinearColor Edge(0.16f, 0.62f, 0.86f, A);
+		// 内沿再压一条亮线：光靠 26% 的半透明带，压在本来就偏蓝的墙面构件上几乎看不出来
+		const FLinearColor Lip(0.45f, 0.88f, 1.00f, A + 0.28f);
+		const float Th = 30.f * U;
+		const float Lp = 3.f * U;
+		DrawRect(Edge, 0.f, 0.f, SW, Th);
+		DrawRect(Edge, 0.f, SH - Th, SW, Th);
+		DrawRect(Edge, 0.f, Th, Th, SH - Th * 2.f);
+		DrawRect(Edge, SW - Th, Th, Th, SH - Th * 2.f);
+		DrawRect(Lip, 0.f, Th, SW, Lp);
+		DrawRect(Lip, 0.f, SH - Th - Lp, SW, Lp);
+		DrawRect(Lip, Th, Th, Lp, SH - Th * 2.f);
+		DrawRect(Lip, SW - Th - Lp, Th, Lp, SH - Th * 2.f);
+	}
+
 	// ---------------- 左上：波次 / 击杀 / 金币
 	Txt(FSUtil::L(TEXT("波次"), TEXT("WAVE")), M, M, 0.85f * U, FSPal::Dim);
 	const FString WaveStr = FString::FromInt(GM->Wave);
@@ -615,6 +638,9 @@ void AFSHUD::DrawPlaying(AFSGameMode* GM, AFSPlayerChar* P, float U)
 	}
 	Txt(FSUtil::L(TEXT("符石"), TEXT("RUNES")), SW * 0.5f, RuneY - 32.f * U, 0.8f * U, FSPal::Dim, true);
 
+	// ---------------- 底部中间（符石上方）：流派主动技
+	DrawAbilityBar(P, U);
+
 	// ---------------- 准星（暂停时不画，免得和菜单抢视线）
 	float MX = 0.f, MY = 0.f;
 	if (!GM->bPaused && PlayerOwner && PlayerOwner->GetMousePosition(MX, MY))
@@ -679,6 +705,115 @@ void AFSHUD::DrawPlaying(AFSGameMode* GM, AFSPlayerChar* P, float U)
 	}
 }
 
+void AFSHUD::DrawAbilityBar(AFSPlayerChar* P, float U)
+{
+	const float M = 28.f * U;
+	const EFSAbility A = P->GetAbilityKind();
+	const bool bNone = (A == EFSAbility::None);
+	const EFSPath Path = bNone ? EFSPath::Fury : FSDefs::AbilityPath(A);
+	const FLinearColor Col = FSDefs::PathColor(Path);
+	const bool bActive = P->IsAbilityActive();
+	const bool bReady = P->IsAbilityReady();
+	const float T = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+
+	const float H = 38.f * U;
+	const float KeyW = 26.f * U;
+	const float W = 224.f * U;
+	const float X = SW * 0.5f - (W + KeyW + 8.f * U) * 0.5f;
+	// 位置夹在"底部威胁箭头（SH-96U）"和"左侧流派 chip（SH-140U 左右）"之间：
+	// 再往下会被箭头戳穿，再往上会撞到流派 chip
+	const float Y = SH - M - 138.f * U;
+	const float BoxX = X + KeyW + 8.f * U;
+
+	// 按键先画：读起来是"Q → 会发生什么"，而不是一串等权重的字
+	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.74f), X, Y, KeyW, H);
+	DrawRect(FLinearColor(Col.R, Col.G, Col.B, (bReady || bActive) ? 0.95f : 0.32f), X, Y, 2.f * U, H);
+	Txt(TEXT("Q"), X + KeyW * 0.5f, Y + H * 0.5f - 9.f * U, 1.0f * U,
+		bReady ? FSPal::White : FSPal::Dim, true);
+
+	DrawRect(FLinearColor(0.f, 0.f, 0.f, 0.74f), BoxX, Y, W, H);
+
+	// 充能（或剩余时间）直接铺满整块底，而不是另起一条细线：
+	// 这个位置离视线中心很远，一条 2px 的线等于没有
+	const float Pct = P->GetAbilityPct();
+	const float FillA = bActive ? 0.30f : (bNone ? 0.10f : 0.26f);
+	DrawRect(FLinearColor(Col.R, Col.G, Col.B, FillA), BoxX, Y, W * Pct, H);
+
+	// 边框只画一条底边：就绪时呼吸，这是"能按了"唯一不需要读字的提示
+	const float EdgeA = bReady ? (0.55f + 0.45f * FMath::Sin(T * 5.0f)) : 0.28f;
+	DrawRect(FLinearColor(Col.R, Col.G, Col.B, EdgeA), BoxX, Y + H - 2.f * U, W, 2.f * U);
+
+	const FString Name = bNone
+		? FSUtil::L(TEXT("未 定 流 派"), TEXT("NO ART BOUND"))
+		: FSUtil::L(FSDefs::AbilityNameCN(A), FSDefs::AbilityNameEN(A));
+	// 未定时不抢视线：它是"提示"，不是"当前装备"
+	Txt(Name, BoxX + 10.f * U, Y + 5.f * U, 0.92f * U,
+		bNone ? FSPal::Dim : (bActive ? FSPal::White : Col));
+
+	// 副行：觉醒标记 / 护盾剩余 / 充能说明，一行只放一件事
+	{
+		FString Sub;
+		FLinearColor SubCol = FLinearColor(0.58f, 0.64f, 0.74f, 0.95f);
+		if (bNone)
+		{
+			Sub = FSUtil::L(TEXT("选一条流派即可绑定"), TEXT("PICK A PATH"));
+		}
+		else if (P->HasShield())
+		{
+			Sub = FS_FMT(TEXT("护盾 %d"), TEXT("SHIELD %d"),
+				FMath::RoundToInt(P->GetShieldPct() * 100.f));
+			SubCol = FSPal::Green;
+		}
+		else if (P->GetAbilityLock() > 0.f)
+		{
+			// 冷却期条是不涨的：不写一句"为什么"，玩家会以为按键坏了
+			Sub = FSUtil::L(TEXT("充能冷却中"), TEXT("RECHARGING"));
+			SubCol = FLinearColor(0.56f, 0.62f, 0.72f, 0.95f);
+		}
+		else if (P->IsAbilityAwakened())
+		{
+			Sub = FSUtil::L(TEXT("已 觉 醒"), TEXT("AWAKENED"));
+			SubCol = FLinearColor(1.f, 0.90f, 0.62f, 0.95f);
+		}
+		else
+		{
+			Sub = FSUtil::L(TEXT("造成伤害充能"), TEXT("CHARGE BY DAMAGE"));
+		}
+		Txt(Sub, BoxX + 10.f * U, Y + 21.f * U, 0.62f * U, SubCol);
+	}
+
+	// 右侧状态：就绪 / 剩余秒数 / 百分比。三者互斥，永远只有一个读数
+	{
+		FString Right;
+		FLinearColor RC = FSPal::Dim;
+		float Scale = 0.95f;
+		if (bActive)
+		{
+			Right = FString::Printf(TEXT("%.1fs"), P->GetAbilityTimeLeft());
+			RC = FSPal::White;
+			Scale = 1.15f;
+		}
+		else if (P->GetAbilityLock() > 0.f)
+		{
+			Right = FString::Printf(TEXT("%.1fs"), P->GetAbilityLock());
+			RC = FLinearColor(0.58f, 0.64f, 0.74f, 0.95f);
+			Scale = 0.85f;
+		}
+		else if (bReady)
+		{
+			Right = FSUtil::L(TEXT("就  绪"), TEXT("READY"));
+			RC = FLinearColor(1.f, 1.f, 1.f, 0.62f + 0.38f * FMath::Sin(T * 5.0f));
+			Scale = 0.95f;
+		}
+		else
+		{
+			Right = FString::Printf(TEXT("%d%%"), FMath::RoundToInt(P->GetAbilityChargePct() * 100.f));
+			Scale = 0.85f;
+		}
+		Txt(Right, BoxX + W - 10.f * U - TxtW(Right, Scale), Y + H * 0.5f - 9.f * U, Scale, RC);
+	}
+}
+
 void AFSHUD::DrawTitle(AFSGameMode* GM, float U)
 {
 	DrawRect(FLinearColor(0.f, 0.f, 0.01f, 0.62f), 0.f, 0.f, SW, SH);
@@ -699,18 +834,22 @@ void AFSHUD::DrawTitle(AFSGameMode* GM, float U)
 
 	// 操作说明：两条横排，避开画面中央的角色
 	const float RowY = SH * 0.575f;
-	Txt(FSUtil::L(TEXT("键鼠    WASD 移动   ·   鼠标 瞄准   ·   左键 连射   ·   空格 闪避"),
-		TEXT("KEYBOARD    WASD MOVE  ·  MOUSE AIM  ·  LMB FIRE  ·  SPACE DASH")),
+	Txt(FSUtil::L(TEXT("键鼠    WASD 移动   ·   鼠标 瞄准   ·   左键 连射   ·   空格 闪避   ·   Q 主动技"),
+		TEXT("KEYBOARD    WASD MOVE  ·  MOUSE AIM  ·  LMB FIRE  ·  SPACE DASH  ·  Q ART")),
 		CX, RowY, 0.95f * U, FSPal::White, true);
-	Txt(FSUtil::L(TEXT("手柄    左摇杆 移动   ·   右摇杆 瞄准   ·   RT 射击   ·   A 闪避"),
-		TEXT("GAMEPAD    L-STICK MOVE  ·  R-STICK AIM  ·  RT FIRE  ·  A DASH")),
+	Txt(FSUtil::L(TEXT("手柄    左摇杆 移动   ·   右摇杆 瞄准   ·   RT 射击   ·   A 闪避   ·   Y 主动技"),
+		TEXT("GAMEPAD    L-STICK MOVE  ·  R-STICK AIM  ·  RT FIRE  ·  A DASH  ·  Y ART")),
 		CX, RowY + 30.f * U, 0.95f * U, FSPal::White, true);
+	// 主动技单独一行：它是"跟着流派走"的东西，不写清楚会被当成固定技能
+	Txt(FSUtil::L(TEXT("主动技由你叠得最多的那条流派决定 · 造成伤害充能"),
+		TEXT("YOUR ART COMES FROM YOUR DOMINANT PATH  -  CHARGE IT BY DEALING DAMAGE")),
+		CX, RowY + 62.f * U, 0.9f * U, FSPal::Cyan, true);
 	Txt(FSUtil::L(TEXT("集齐 3 颗符石召唤守护兽        M 静音        ESC 暂停"),
 		TEXT("COLLECT 3 RUNES TO SUMMON A GUARDIAN        M = MUTE        ESC = PAUSE")),
-		CX, RowY + 66.f * U, 0.9f * U, FSPal::Gold, true);
+		CX, RowY + 96.f * U, 0.9f * U, FSPal::Gold, true);
 	Txt(FSUtil::L(TEXT("金币也会累积等级 - 升级随机强化 伤害 / 射速 / 移速 / 生命 / 闪避"),
 		TEXT("COINS ALSO GRANT LEVELS - UPGRADES BOOST DAMAGE / RATE / SPEED / HP / DASH")),
-		CX, RowY + 92.f * U, 0.82f * U, FSPal::Dim, true);
+		CX, RowY + 122.f * U, 0.82f * U, FSPal::Dim, true);
 
 	const float Pulse = 0.65f + 0.35f * FMath::Sin(GetWorld()->GetTimeSeconds() * 3.4f);
 	Txt(FSUtil::L(TEXT("点击 左键 / 按 RT 开始"), TEXT("CLICK OR PRESS RT TO START")), CX, SH * 0.775f, 1.9f * U,
