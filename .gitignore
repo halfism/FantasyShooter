@@ -1,0 +1,32 @@
+# Unreal Engine 生成物 / 本地缓存
+Binaries/
+Intermediate/
+DerivedDataCache/
+Saved/
+Build/
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.user
+*.opensdf
+*.sdf
+*.pdb
+*.ilk
+*.exp
+*.obj
+*.log
+*.tmp
+
+# 打包产物
+Packaged/
+PackagedShipping/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本工具的工作日志
+Tools/local/
