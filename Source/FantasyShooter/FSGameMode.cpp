@@ -290,6 +290,7 @@ void AFSGameMode::StartGame()
 	bGuardianOn = false;
 	DamageFlash = 0.f;
 	ArtFlash = 0.f;
+	ArtFlashRate = 2.6f;
 	Combo = 0;
 	RunBestCombo = 0;
 	ComboTimer = 0.f;
@@ -1320,15 +1321,28 @@ void AFSGameMode::AnnouncePathAwaken(EFSPath P)
 		break;
 	}
 
-	SetBanner(Main, Sub, 2.6f);
-	// 暗角闪红别开太重：0.5 以上会把整个战场染成橙色，只剩"红"看不出别的
-	DamageFlash = 0.26f;
-	FSAudio::Play2D(this, EFSSfx::Upgrade, 1.0f, 0.80f);
+	SetBanner(Main, Sub, 3.0f);
+
+	// 觉醒是整局最高级别的事件之一，体感上必须和"捡到一把武器"拉开距离。
+	// 用的还是开招那套语言（推镜头 + 色脉冲 + 顿帧），只是更慢、更深——
+	// 同一套语法，不同音量，玩家不用学第二遍。
+	// 红闪在这里去掉：红是"受伤"的语言，和流派色脉冲同时出现会互相打架。
+	DamageFlash = 0.f;
+	ArtFlashColor = FSDefs::PathColor(P);
+	ArtFlash = 1.f;
+	ArtFlashRate = 1.6f;   // 比开招慢：0.62 秒的余韵，看得出"这是一件大事"
+
+	FSAudio::Play2D(this, EFSSfx::Upgrade, 0.90f, 0.80f);
+	FSAudio::Play2D(this, EFSSfx::ArtCast, 1.25f, 0.62f);
+	// 顿帧只给 0.10 秒：觉醒发生在清波间隙，停久了像卡住而不是"定格"
+	RequestHitStop(0.22f, 0.10f);
+
 	UE_LOG(LogTemp, Warning, TEXT("[FSAWAKEN] path=%d awakened"), (int32)P);
 
 	if (AFSPlayerChar* P2 = GetPlayerChar())
 	{
-		P2->AddShake(12.f);
+		P2->TriggerImpact(210.f, 0.95f, 20.f);
+		P2->FlashAwakenHalo();
 		if (UWorld* W = GetWorld())
 		{
 			const FLinearColor Col = FSDefs::PathColor(P);
@@ -2344,11 +2358,28 @@ void AFSGameMode::Tick(float DeltaSeconds)
 			else if (PBStage == 16 && El > 0.3)
 			{
 				PBStage = 17;
-				bPBDone = true;
+				PBTick = FPlatformTime::Seconds();
 				EnemySpeedMul = 1.f;   // 自检把敌人的位移冻住了，收尾必须还回去
 				// 收招后时间流速必须回到 1：漏了这条，整局敌人会永远慢半拍
 				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] art done: scale=%.2f (expect 1.00) active=%d"),
 					EnemyTimeScale, PP->IsAbilityActive() ? 1 : 0);
+			}
+			else if (PBStage == 17 && El > 0.4)
+			{
+				// 觉醒冲击：和开招同一套通道，但更深（210 vs 150）、更慢（0.95s vs 0.55s）、
+				// 色脉冲也更长（1.6/s vs 2.6/s）。这里验证"接线接上了"。
+				PBStage = 18;
+				PBTick = FPlatformTime::Seconds();
+				AnnouncePathAwaken(EFSPath::Ward);
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] awaken impact: punch=%.2f artFlash=%.2f rate=%.1f color=(%.2f,%.2f,%.2f) (expect 1.00 / 1.00 / 1.6 / ward green)"),
+					PP->GetCastPunch(), ArtFlash, ArtFlashRate, ArtFlashColor.R, ArtFlashColor.G, ArtFlashColor.B);
+			}
+			else if (PBStage == 18 && El > 1.1)
+			{
+				PBStage = 19;
+				bPBDone = true;
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] awaken settled: punch=%.2f camPull=%.0f peak=%.0f (expect 0 / 0 / ~-196)"),
+					PP->GetCastPunch(), PP->GetCamPull(), PP->GetCamPullPeak());
 			}
 		}
 	}
@@ -2633,6 +2664,56 @@ void AFSGameMode::Tick(float DeltaSeconds)
 		}
 	}
 
+	// ---- 觉醒摆拍（-fsawakenshot）：第 2 秒真觉醒一次，留"冲击"与"余韵"两张图。
+	// 觉醒的推镜比开招更慢（0.95s），所以余韵那张要等到 1.15s 之后才拍得到落回原位的样子。
+	{
+		static bool bAWInit = false;
+		static bool bAW = false;
+		static int32 AWStage = 0;
+		static double AWStart = 0.0;
+		static double AWAt = 0.0;
+		if (!bAWInit)
+		{
+			bAWInit = true;
+			bAW = FParse::Param(FCommandLine::Get(), TEXT("fsawakenshot"));
+			AWStart = FPlatformTime::Seconds();
+		}
+		if (bAW && Phase == EFSPhase::Playing)
+		{
+			const double El = FPlatformTime::Seconds() - AWStart;
+			AFSPlayerChar* SP = GetPlayerChar();
+			if (AWStage == 0 && El > 2.0 && SP)
+			{
+				AWStage = 1;
+				AWAt = FPlatformTime::Seconds();
+				// 先真的把这一系叠到觉醒：不然"余韵"那张里光环还是没变色的样子，
+				// 拍出来等于只验证了屏幕脉冲，没验证觉醒本身
+				SP->DebugSetPathStacks(EFSPath::Fury, FSDefs::PathAwakenStacks);
+				AnnouncePathAwaken(EFSPath::Fury);
+				UE_LOG(LogTemp, Log, TEXT("[FSAWD] announce punch=%.2f flash=%.2f rate=%.2f"),
+					SP->GetCastPunch(), ArtFlash, ArtFlashRate);
+			}
+			if (AWStage == 1 && FPlatformTime::Seconds() - AWAt > 0.10)
+			{
+				AWStage = 2;
+				FScreenshotRequest::RequestScreenshot(
+					FPaths::ProjectSavedDir() / TEXT("Awaken_Impact.png"), false, false);
+			}
+			if (AWStage == 2 && FPlatformTime::Seconds() - AWAt > 1.15)
+			{
+				AWStage = 3;
+				if (SP)
+				{
+					UE_LOG(LogTemp, Log, TEXT("[FSAWD] settled: punch=%.2f camPull=%.0f peak=%.0f flash=%.2f"),
+						SP->GetCastPunch(), SP->GetCamPull(), SP->GetCamPullPeak(), ArtFlash);
+					SP->DebugDumpRings();
+				}
+				FScreenshotRequest::RequestScreenshot(
+					FPaths::ProjectSavedDir() / TEXT("Awaken_After.png"), false, false);
+			}
+		}
+	}
+
 	// ---- 残影窗口验证（-fssurge）：注入疾影觉醒后主动闪避，
 	// 在 0.8 秒窗口里截图，检查准星弧与弹丸加粗
 	{
@@ -2766,7 +2847,7 @@ void AFSGameMode::Tick(float DeltaSeconds)
 	DamageFlash = FMath::Max(0.f, DamageFlash - DeltaSeconds * 2.2f);
 	// 开招脉冲褪得比受伤闪快一档：它是一记"落手"，不是持续状态。
 	// 用游戏时间推进，所以顿帧期间它也会跟着停住——正好读成"世界卡了一下"。
-	ArtFlash = FMath::Max(0.f, ArtFlash - DeltaSeconds * 2.6f);
+	ArtFlash = FMath::Max(0.f, ArtFlash - DeltaSeconds * ArtFlashRate);
 	BannerTime = FMath::Max(0.f, BannerTime - DeltaSeconds);
 	ComboPulse = FMath::Max(0.f, ComboPulse - DeltaSeconds * 2.5f);
 	LevelPulse = FMath::Max(0.f, LevelPulse - DeltaSeconds * 2.0f);

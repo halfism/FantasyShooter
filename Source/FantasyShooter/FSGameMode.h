@@ -113,6 +113,8 @@ public:
 	 */
 	float ArtFlash = 0.f;
 	FLinearColor ArtFlashColor = FLinearColor::White;
+	/** 色脉冲衰减速度（每秒）：开招 2.6（约 0.4 秒），觉醒放慢到 1.6 让仪式感长一点 */
+	float ArtFlashRate = 2.6f;
 
 	// ---- 波次
 	TArray<EFSEnemyKind> SpawnQueue;

@@ -513,8 +513,9 @@ void AFSPlayerChar::CastAbility(EFSAbility A)
 		break;
 	case EFSAbility::Bulwark:
 		AbilityDuration = bAwe ? 7.5f : 6.0f;
-		// 半径必须明显小于觉醒光环（178uu）：176 会正好和它重合，青+绿叠成一圈
-		// 说不清颜色的钢青色，护盾的"绿"就没了。收到贴身尺寸反而更像"裹在身上的一层壳"。
+		// 半径收到贴身尺寸（130/112）。原版 176 会和觉醒外圈挤在同一圈上（实测 89uu 外圈 +
+		// 配套碎晶，见 AwakenRing），青+绿叠成一圈说不清颜色的钢青，护盾的"绿"就没了。
+		// 半径以 [FSRING] 打出来的 scale(uu) 为准，别按 scale×100 估。
 		RingR = bAwe ? 130.f : 112.f;
 		// ArtRing 是实心圆柱，"环"靠 ArtCore 压在上面露出的边缘。0.94 的差值在
 		// 半径 130 时只剩 8uu（屏幕上一根发丝），所以壁垒单独把边带加厚到 20%。
@@ -573,6 +574,8 @@ void AFSPlayerChar::CastAbility(EFSAbility A)
 		// 屏幕脉冲由 HUD 统一画：GameMode 只存"还剩多亮"和"什么颜色"
 		GM->ArtFlash = 1.f;
 		GM->ArtFlashColor = Col;
+		// 觉醒会把衰减放慢，这里必须显式写回：否则一场觉醒之后所有开招都变拖沓
+		GM->ArtFlashRate = 2.6f;
 	}
 
 	AddNotice(FString::Printf(TEXT("%s%s"),
@@ -759,6 +762,45 @@ void AFSPlayerChar::Heal(float Amount)
 void AFSPlayerChar::AddShake(float Amount)
 {
 	Shake = FMath::Min(Shake + Amount, 26.f);
+}
+
+void AFSPlayerChar::TriggerImpact(float Pull, float Dur, float ShakeAmt)
+{
+	// 大事件（觉醒 / 通关）和开招共用同一条通道：都是"世界为这件事停一下"，
+	// 只是推得更深、回得更慢。分成两套的话，玩家会觉得两者的分量不可比。
+	CastPunch = 1.f;
+	CastPunchPull = FMath::Max(0.f, Pull);
+	CastPunchDur = FMath::Max(0.05f, Dur);
+	CamPullPeak = 0.f;
+	AddShake(ShakeAmt);
+}
+
+void AFSPlayerChar::DebugDumpRings()
+{
+	auto Dump = [](const TCHAR* Tag, UStaticMeshComponent* C)
+	{
+		if (!C)
+		{
+			UE_LOG(LogTemp, Log, TEXT("[FSRING] %s null"), Tag);
+			return;
+		}
+		FLinearColor Col(-1.f, -1.f, -1.f, 1.f);
+		float Inten = -1.f;
+		if (UMaterialInstanceDynamic* MID = Cast<UMaterialInstanceDynamic>(C->GetMaterial(0)))
+		{
+			MID->GetVectorParameterValue(FMaterialParameterInfo(TEXT("Color")), Col);
+			MID->GetScalarParameterValue(FMaterialParameterInfo(TEXT("Intensity")), Inten);
+		}
+		const FVector S = C->GetRelativeScale3D();
+		UE_LOG(LogTemp, Log, TEXT("[FSRING] %s vis=%d scale=%.2f(%.0fuu) col=(%.2f,%.2f,%.2f) int=%.2f z=%.1f"),
+			Tag, C->IsVisible() ? 1 : 0, S.X, S.X * 50.f, Col.R, Col.G, Col.B, Inten,
+			C->GetRelativeLocation().Z);
+	};
+	Dump(TEXT("HaloOuter"), HaloOuter);
+	Dump(TEXT("HaloInner"), HaloInner);
+	Dump(TEXT("AwakenRing"), AwakenRing);
+	Dump(TEXT("AwakenRingCore"), AwakenRingCore);
+	UE_LOG(LogTemp, Log, TEXT("[FSRING] awakenPath=%d flash=%.2f"), AwakenPath, AwakenFlash);
 }
 
 void AFSPlayerChar::AddNotice(const FString& Text, float Duration)
@@ -972,6 +1014,19 @@ void AFSPlayerChar::TickAwakenBody(float DeltaSeconds)
 	const EFSPath Pth = (EFSPath)AwakenPath;
 	const FLinearColor Col = FSDefs::PathColor(Pth);
 
+	// 觉醒那一瞬间把两层环一起点亮，约 0.65 秒退回常驻亮度。
+	// 每帧重写而不是"进出来回设一次"：中途重开 / 暂停都不会留下错的值。
+	// 上限 0.88：自发光一过 1.0 就被夹白，"觉醒"当场变成一团白光，流派色白给。
+	const float Boost = 0.30f * AwakenFlash;
+	if (HaloOuter)
+	{
+		FSUtil::SetShapeColor(HaloOuter, Col, FMath::Min(0.88f, 0.55f + Boost));
+	}
+	if (AwakenRing)
+	{
+		FSUtil::SetShapeColor(AwakenRing, Col, FMath::Min(0.88f, 0.60f + Boost));
+	}
+
 	// 三条流派各给一个"性格"：烈焰转得急、疾影铺得开、壁垒沉而稳。
 	// 只换颜色的话，三条路看起来会一模一样，觉醒就没有辨识度。
 	// 半径要略小于觉醒外圈（1.78 → 178uu），碎晶才像"绕着光环转"，
@@ -1138,6 +1193,7 @@ void AFSPlayerChar::Tick(float DeltaSeconds)
 	CastPunch = FMath::Max(0.f, CastPunch - DeltaSeconds / FMath::Max(0.01f, CastPunchDur));
 	CamPullNow = -CastPunchPull * CastPunch * CastPunch;
 	CamPullPeak = FMath::Min(CamPullPeak, CamPullNow);
+	AwakenFlash = FMath::Max(0.f, AwakenFlash - DeltaSeconds * 1.5f);
 
 	if (SpringArm)
 	{

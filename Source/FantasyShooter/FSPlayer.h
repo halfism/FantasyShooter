@@ -63,6 +63,15 @@ public:
 	float GetCamPull() const { return CamPullNow; }
 	/** 本次开招推近的峰值（应为负值，觉醒更深）。自检用它证明"镜头真的动了" */
 	float GetCamPullPeak() const { return CamPullPeak; }
+	/**
+	 * 外部触发的一记冲击：推镜头 + 震屏，不带任何技能逻辑。
+	 * 觉醒、通关这类"大事件"复用它，保证全游戏的"重"是同一套语言。
+	 */
+	void TriggerImpact(float Pull, float Dur, float ShakeAmt);
+	/** 觉醒瞬间把脚下光环临时点亮（由 GameMode 在播报觉醒时调用） */
+	void FlashAwakenHalo() { AwakenFlash = 1.f; }
+	/** 临时诊断：把脚下四层环的可见性 / 缩放 / 材质实际颜色打出来 */
+	void DebugDumpRings();
 	/** 调试（自检 / 摆拍用）：直接把某条流派设为 N 层，并把觉醒外观刷出来 */
 	void DebugSetPathStacks(EFSPath P, int32 N);
 	// 摆拍/排查用：把脚下那个 ArtRing 的实际半径与材质颜色读回来，
@@ -256,6 +265,8 @@ protected:
 	int32 AwakenPath = -1;
 	float AwakenT = 0.f;
 	float HaloT = 0.f;         // 光环本身的呼吸相位（未觉醒也在走）
+	/** 觉醒瞬间把光环临时点亮一下（1→0）：光靠"换了个颜色"读不出"刚刚发生了什么" */
+	float AwakenFlash = 0.f;
 
 	UPROPERTY()
 	UStaticMeshComponent* HaloOuter = nullptr;
