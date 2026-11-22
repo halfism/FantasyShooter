@@ -57,6 +57,12 @@ public:
 	bool IsAbilityAwakened() const;
 	/** 主动技伤害窗口：敌人受击时读它，决定这次伤害要不要给充能 */
 	bool IsArtDamageLocked() const { return bArtDamageLock; }
+	/** 开招镜头推近量（0..1）。自检读它确认"推了"以及"推完真的回来了" */
+	float GetCastPunch() const { return CastPunch; }
+	/** 相机臂长的实际偏移（负 = 被推近）。自检用它断言镜头复位 */
+	float GetCamPull() const { return CamPullNow; }
+	/** 本次开招推近的峰值（应为负值，觉醒更深）。自检用它证明"镜头真的动了" */
+	float GetCamPullPeak() const { return CamPullPeak; }
 	/** 调试（自检 / 摆拍用）：直接把某条流派设为 N 层，并把觉醒外观刷出来 */
 	void DebugSetPathStacks(EFSPath P, int32 N);
 	// 摆拍/排查用：把脚下那个 ArtRing 的实际半径与材质颜色读回来，
@@ -172,6 +178,25 @@ protected:
 	/** 相机俯角基准。调试 -fscam 会改它，正常运行时固定 -55 */
 	float CamPitchBase = -55.f;
 
+	/**
+	 * 相机基准臂长 / FOV。-fscam 会在构造函数里改臂长，所以基准值必须在
+	 * 解析之后抓一次，否则"开招推近"和调试参数会互相覆盖。
+	 */
+	float CamBaseArm = 1480.f;
+	float CamBaseFov = 62.f;
+
+	/**
+	 * 开招冲击的镜头推近：CastPunch 从 1 线性衰减到 0，
+	 * 臂长偏移 = -CastPunchPull × CastPunch²（二次方 → 前段收回得快，读起来是"弹一下"）。
+	 * Fast 版本只在觉醒时用：觉醒招本来就更大，镜头也推得更狠一点。
+	 */
+	float CastPunch = 0.f;
+	float CastPunchPull = 0.f;
+	float CastPunchDur = 0.45f;
+	float CamPullNow = 0.f;
+	/** 本次开招推近到过的最远处（负值）。自检读它——0.4 秒后再采样已经落回原位了 */
+	float CamPullPeak = 0.f;
+
 	UPROPERTY()
 	UCameraComponent* Camera = nullptr;
 
@@ -266,8 +291,12 @@ protected:
 	/** 时缓的敌人时间流速：未觉醒 / 觉醒 */
 	static constexpr float SlowScaleBase = 0.32f;
 	static constexpr float SlowScaleAwake = 0.24f;
-	/** 焚场暗芯相对亮盘的半径比：留出的那一圈就是"火线"的宽度 */
-	static constexpr float PyreCoreMul = 0.92f;
+	/**
+	 * 焚场暗芯相对亮盘的半径比：留出的那一圈就是"火线"的宽度。
+	 * 0.92 在半径 410 时是 33uu 的一条宽边，自发光叠上泛光后整圈会被冲成米黄，
+	 * 看着像"烤焦的饼边"而不是火。收到 0.945（约 22uu）才留得住橙色。
+	 */
+	static constexpr float PyreCoreMul = 0.945f;
 	/**
 	 * 放完之后的"充能冷却"：这段时间里伤害不再攒充能。
 	 * 没有它的话，伤害越高充得越快——实测后期每 8 秒就能放一次，

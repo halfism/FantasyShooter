@@ -289,6 +289,7 @@ void AFSGameMode::StartGame()
 	GuardianLeft = 0.f;
 	bGuardianOn = false;
 	DamageFlash = 0.f;
+	ArtFlash = 0.f;
 	Combo = 0;
 	RunBestCombo = 0;
 	ComboTimer = 0.f;
@@ -2246,6 +2247,11 @@ void AFSGameMode::Tick(float DeltaSeconds)
 				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] pyre cast: casts %d=>%d charge=%.0f%% active=%d dur=%.1f targetHp=%.0f"),
 					CastsBefore, PP->GetAbilityCasts(), PP->GetAbilityChargePct() * 100.f,
 					PP->IsAbilityActive() ? 1 : 0, PP->GetAbilityTimeLeft(), PBArtHp);
+
+				// 开招冲击：镜头推近 / 屏幕脉冲必须在施放当帧就置位。
+				// camPull 要等下一帧才更新（Tick 里算），所以这里只看 punch 与 flash。
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] cast impact: punch=%.2f artFlash=%.2f color=(%.2f,%.2f,%.2f) (expect 1.00 / 1.00 / 1.00,0.42,0.30)"),
+					PP->GetCastPunch(), ArtFlash, ArtFlashColor.R, ArtFlashColor.G, ArtFlashColor.B);
 			}
 			else if (PBStage == 12 && El > 1.1)
 			{
@@ -2274,6 +2280,10 @@ void AFSGameMode::Tick(float DeltaSeconds)
 				PBTick = FPlatformTime::Seconds();
 
 				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] pyre ended: active=%d (expect 0)"), PP->IsAbilityActive() ? 1 : 0);
+
+				// 冲击必须完全落回原点：镜头一旦留在推近状态，玩家会以为卡了 FOV
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] cast punch settled: punch=%.2f camPull=%.0f peak=%.0f artFlash=%.2f (expect 0 / 0 / ~-150 / 0)"),
+					PP->GetCastPunch(), PP->GetCamPull(), PP->GetCamPullPeak(), ArtFlash);
 
 				for (int32 i = 0; i < (int32)EFSPath::Count; ++i)
 				{
@@ -2541,9 +2551,10 @@ void AFSGameMode::Tick(float DeltaSeconds)
 		static bool bArtInit = false;
 		static int32 ArtPath = -1;
 		static double ArtStart = 0.0;
-		// -fsartshot：定时刻强放一次再留两张图（开招 + 展开中），不看机器人有没有贴近
+		// -fsartshot：定时刻强放一次再留三张图（冲击 / 开招 / 展开中），不看机器人有没有贴近
 		static bool bShot = false;
 		static bool bShotCast = false;
+		static bool bShotCap0 = false;
 		static bool bShotCap1 = false;
 		static bool bShotCap2 = false;
 		static double ShotAt = 0.0;
@@ -2596,6 +2607,14 @@ void AFSGameMode::Tick(float DeltaSeconds)
 					bShotCap1 = true;
 					FScreenshotRequest::RequestScreenshot(
 						FPaths::ProjectSavedDir() / FString::Printf(TEXT("Art_%s_Cast.png"), Tag), false, false);
+				}
+				// 开招冲击只有 0.4 秒，0.4s 那张已经基本落回原位了。
+				// 单独留一张 0.10 秒的：镜头推近 + 屏幕色脉冲都还在峰值的六成以上。
+				if (!bShotCap0 && Since > 0.10)
+				{
+					bShotCap0 = true;
+					FScreenshotRequest::RequestScreenshot(
+						FPaths::ProjectSavedDir() / FString::Printf(TEXT("Art_%s_Impact.png"), Tag), false, false);
 				}
 				if (!bShotCap2 && Since > 1.60)
 				{
@@ -2745,6 +2764,9 @@ void AFSGameMode::Tick(float DeltaSeconds)
 	}
 
 	DamageFlash = FMath::Max(0.f, DamageFlash - DeltaSeconds * 2.2f);
+	// 开招脉冲褪得比受伤闪快一档：它是一记"落手"，不是持续状态。
+	// 用游戏时间推进，所以顿帧期间它也会跟着停住——正好读成"世界卡了一下"。
+	ArtFlash = FMath::Max(0.f, ArtFlash - DeltaSeconds * 2.6f);
 	BannerTime = FMath::Max(0.f, BannerTime - DeltaSeconds);
 	ComboPulse = FMath::Max(0.f, ComboPulse - DeltaSeconds * 2.5f);
 	LevelPulse = FMath::Max(0.f, LevelPulse - DeltaSeconds * 2.0f);

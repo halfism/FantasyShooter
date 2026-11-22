@@ -205,6 +205,19 @@ namespace
 			s = FsSine(V.P1, 880.f * V.Pitch, Dt) * FsAtk(t, 200.f) * FsEnv(t, 22.f) * 0.35f;
 			break;
 		}
+		case EFSSfx::ArtCast:
+		{
+			// 三招共用这一个"起手"：低频砸地告诉玩家"按到了"，
+			// 上升扫频把动作往前推，金属尾给一点仪式感。性格差异只靠 Pitch 分。
+			const float Thump = FsSine(V.P1, 64.f * V.Pitch, Dt) * FsEnv(t, 8.5f) * 0.85f;
+			const float SweepF = (180.f + 820.f * FMath::Min(1.f, t / 0.14f)) * V.Pitch;
+			const float Sweep = FsSine(V.P2, SweepF, Dt) * FsAtk(t, 45.f) * FsEnv(t, 4.6f) * 0.42f;
+			const float Tail = FsSine(V.P3, 1560.f * V.Pitch, Dt) * FsAtk(t, 90.f) * FsEnv(t, 3.0f) * 0.16f;
+			// 一点点噪声爆点：纯正弦起手会"太干净"，像 UI 音效而不是打击
+			const float Crunch = FsNoise(V) * FsEnv(t, 26.f) * 0.22f;
+			s = Thump + Sweep + Tail + Crunch;
+			break;
+		}
 		default:
 			break;
 		}
@@ -236,6 +249,7 @@ namespace
 		case EFSSfx::GuardianShot: return 0.12f;
 		case EFSSfx::GameOver: return 1.10f;
 		case EFSSfx::Beep: return 0.10f;
+		case EFSSfx::ArtCast: return 0.85f;
 		default: return 0.2f;
 		}
 	}

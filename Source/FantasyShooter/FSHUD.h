@@ -35,6 +35,12 @@ protected:
 	void DrawVignette(float U, float Flash, float HpPct, bool bLowHpWarn);
 	/** 不屈免死的全屏绿闪：一次性，读玩家身上的 DeathSaveFlash */
 	void DrawSaveFlash(float U, float A);
+	/**
+	 * 开招的屏幕色脉冲：一圈路径色暗角 + 极短的全屏白闪。
+	 * 必须在所有 HUD 之前画（和时缓的边框带同一条规矩），否则会把
+	 * 左上数据条与底部血条一起压暗。
+	 */
+	void DrawCastPulse(AFSGameMode* GM, float U);
 	/** 准星外的残影射速环：Pct 是剩余时间比例（1 → 0） */
 	void DrawSurgeArc(float CX, float CY, float Pct, float U);
 	/** 底部中间：流派主动技的充能条 / 剩余时间 */

@@ -106,6 +106,14 @@ public:
 	float BannerTime = 0.f;
 	float DamageFlash = 0.f;
 
+	/**
+	 * 开招时的屏幕色脉冲：1 → 0 在 0.42 秒内褪完，颜色由主动技绑定的流派决定。
+	 * 放在 GameMode 而不是 Player，是因为它属于"屏幕状态"，和 DamageFlash 同一层，
+	 * HUD 只需要一个来源；谁放招谁负责把它置 1（见 AFSPlayerChar::CastAbility）。
+	 */
+	float ArtFlash = 0.f;
+	FLinearColor ArtFlashColor = FLinearColor::White;
+
 	// ---- 波次
 	TArray<EFSEnemyKind> SpawnQueue;
 	/** 与 SpawnQueue 同长：每一项该刷成什么词缀（None = 普通） */

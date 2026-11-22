@@ -37,6 +37,13 @@ void AFSHUD::DrawHUD()
 	DrawVignette(U, GM->DamageFlash, P ? P->GetHealthPct() : 1.f,
 		P && P->IsAlive() && GM->Phase == EFSPhase::Playing);
 
+	// 开招脉冲也必须在所有 HUD 之前：它是一层覆盖全屏的色带，
+	// 画在 HUD 之后会把左上数据条和底部血条一起压暗（时缓边框带踩过这个坑）。
+	if (GM->Phase == EFSPhase::Playing)
+	{
+		DrawCastPulse(GM, U);
+	}
+
 	if (GM->Phase == EFSPhase::Title)
 	{
 		DrawTitle(GM, U);
@@ -151,6 +158,45 @@ void AFSHUD::DrawVignette(float U, float Flash, float HpPct, bool bLowHpWarn)
 			DrawRect(C, Off, 0.f, Thick, SH);
 			DrawRect(C, SW - Off - Thick, 0.f, Thick, SH);
 		}
+	}
+}
+
+void AFSHUD::DrawCastPulse(AFSGameMode* GM, float U)
+{
+	const float F = GM->ArtFlash;
+	// 暂停时不画：GameMode 的计时跟着暂停一起停，否则这层脉冲会冻在暂停面板底下
+	if (F <= 0.01f || GM->bPaused)
+	{
+		return;
+	}
+
+	// 1.6 次方衰减：前 0.15 秒最亮，随后几乎立刻退干净。
+	// 线性衰减会拖出一条"场上有层色雾"的尾巴——这个项目已经踩过一次（时缓整屏染色）。
+	const float K = FMath::Pow(F, 1.6f);
+	const FLinearColor C = GM->ArtFlashColor;
+
+	// ① 全屏白闪：只活在脉冲最前段，alpha 上限 0.10。
+	//    再高（试过 0.18）会把极暗的战场洗成一片奶色，敌人轮廓全部丢失。
+	const float W = FMath::Clamp((F - 0.66f) / 0.34f, 0.f, 1.f);
+	if (W > 0.f)
+	{
+		const FLinearColor Flash(
+			FMath::Lerp(C.R, 1.f, 0.62f), FMath::Lerp(C.G, 1.f, 0.62f), FMath::Lerp(C.B, 1.f, 0.62f),
+			0.10f * W);
+		DrawRect(Flash, 0.f, 0.f, SW, SH);
+	}
+
+	// ② 路径色暗角：6 层由外向内递减，和低血量红边同一套画法，
+	//    区别是更宽、颜色跟着流派走、而且只活半秒。纯色一整块会显得很生硬。
+	const float Thick = 10.f * U;
+	for (int32 i = 0; i < 6; ++i)
+	{
+		const float Off = i * Thick;
+		const FLinearColor Band(C.R, C.G, C.B, 0.26f * K * (1.f - (float)i / 6.f));
+		DrawRect(Band, 0.f, Off, SW, Thick);
+		DrawRect(Band, 0.f, SH - Off - Thick, SW, Thick);
+		DrawRect(Band, Off, 0.f, Thick, SH);
+		DrawRect(Band, SW - Off - Thick, 0.f, Thick, SH);
 	}
 }
 
@@ -715,6 +761,8 @@ void AFSHUD::DrawAbilityBar(AFSPlayerChar* P, float U)
 	const bool bActive = P->IsAbilityActive();
 	const bool bReady = P->IsAbilityReady();
 	const float T = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.f;
+	// 开招瞬间整条亮一下：手在下方按键，眼睛也在下方，这一下要把"我按的是它"接上
+	const float Punch = P->GetCastPunch();
 
 	const float H = 38.f * U;
 	const float KeyW = 26.f * U;
@@ -737,10 +785,11 @@ void AFSHUD::DrawAbilityBar(AFSPlayerChar* P, float U)
 	// 这个位置离视线中心很远，一条 2px 的线等于没有
 	const float Pct = P->GetAbilityPct();
 	const float FillA = bActive ? 0.30f : (bNone ? 0.10f : 0.26f);
-	DrawRect(FLinearColor(Col.R, Col.G, Col.B, FillA), BoxX, Y, W * Pct, H);
+	DrawRect(FLinearColor(Col.R, Col.G, Col.B, FillA + 0.32f * Punch), BoxX, Y, W * Pct, H);
 
 	// 边框只画一条底边：就绪时呼吸，这是"能按了"唯一不需要读字的提示
-	const float EdgeA = bReady ? (0.55f + 0.45f * FMath::Sin(T * 5.0f)) : 0.28f;
+	const float EdgeA = FMath::Min(1.f,
+		(bReady ? (0.55f + 0.45f * FMath::Sin(T * 5.0f)) : 0.28f) + 0.55f * Punch);
 	DrawRect(FLinearColor(Col.R, Col.G, Col.B, EdgeA), BoxX, Y + H - 2.f * U, W, 2.f * U);
 
 	const FString Name = bNone

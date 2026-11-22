@@ -80,6 +80,11 @@ AFSPlayerChar::AFSPlayerChar()
 	Camera->FieldOfView = 62.f;
 	Camera->bUsePawnControlRotation = false;
 
+	// 必须在 -fscam 解析之后抓基准：开招推近是在基准上做减法，
+	// 拿构造函数里的 1480 当基准会把调试臂长直接顶回去。
+	CamBaseArm = SpringArm->TargetArmLength;
+	CamBaseFov = Camera->FieldOfView;
+
 	if (USkeletalMeshComponent* SkelMesh = GetMesh())
 	{
 		SkelMesh->SetVisibility(false);
@@ -491,9 +496,10 @@ void AFSPlayerChar::CastAbility(EFSAbility A)
 		CoreMul = PyreCoreMul;
 		CoreCol = FLinearColor(0.030f, 0.012f, 0.007f);
 		// 火线用偏橙的红，而不是流派那个偏粉的珊瑚色：后者一亮就被泛光冲成米白，
-		// 看着像一根奶油绳子。强度也压在 0.85——暗场里 1.0 以上就留不住色相。
-		RingCol = FLinearColor(1.00f, 0.33f, 0.10f);
-		RingGlow = 0.85f;
+		// 看着像一根奶油绳子。强度压在 0.70——这条边带宽 22uu，0.85 时自身泛光
+		// 会盖住自己，整圈读成 (246,196,123) 的米黄色（实测采样），色相全丢。
+		RingCol = FLinearColor(1.00f, 0.28f, 0.06f);
+		RingGlow = 0.70f;
 		break;
 	case EFSAbility::SlowTime:
 		AbilityDuration = bAwe ? 3.2f : 2.4f;
@@ -543,17 +549,30 @@ void AFSPlayerChar::CastAbility(EFSAbility A)
 		}
 	}
 
-	// 施放反馈：一圈冲击 + 一次顿帧。三招共用，玩家只需要学会"按下去世界动一下"
+	// 施放反馈：一圈冲击 + 一次顿帧。三招共用，玩家只需要学会"按下去世界动一下"。
+	// 焚场的冲击圈刻意比火环小：410 的冲击盘会和火环叠成一张铺满屏的棕毯，
+	// 把"火线"这个唯一的形状信息淹掉。小一圈反而读成"从脚下炸开一圈"。
 	AFSFx::Shock(GetWorld(), GetActorLocation() - FVector(0.f, 0.f, 84.f),
-		A == EFSAbility::Pyre ? RingR : 320.f, Col, 0.55f, 1.25f);
+		A == EFSAbility::Pyre ? 300.f : 320.f, Col, 0.55f, A == EFSAbility::Pyre ? 0.95f : 1.25f);
 	AFSFx::Burst(GetWorld(), GetActorLocation() + FVector(0.f, 0.f, 40.f), 240.f, Col, 0.32f);
-	FSAudio::Play(this, EFSSfx::Upgrade, GetActorLocation(), 1.35f,
-		A == EFSAbility::Pyre ? 0.72f : (A == EFSAbility::SlowTime ? 0.86f : 0.62f));
-	AddShake(12.f);
+	FSAudio::Play(this, EFSSfx::ArtCast, GetActorLocation(), 1.30f,
+		A == EFSAbility::Pyre ? 0.94f : (A == EFSAbility::SlowTime ? 1.06f : 0.78f));
+
+	// ---- 开招冲击的"手感三件套"：镜头推近 / 屏幕色脉冲 / 震屏
+	// 三招的动作、颜色、声音各不相同，但这一下必须是同一套生理反应，
+	// 否则玩家得为每招重新学一次"我到底放出来了没有"。
+	CastPunch = 1.f;
+	CastPunchPull = bAwe ? 150.f : 108.f;   // 觉醒招更大，镜头也推得更狠
+	CastPunchDur = bAwe ? 0.55f : 0.46f;
+	CamPullPeak = 0.f;
+	AddShake(bAwe ? 15.f : 12.f);
 
 	if (AFSGameMode* GM = AFSGameMode::Get(this))
 	{
 		GM->RequestHitStop(0.18f, 0.07f);
+		// 屏幕脉冲由 HUD 统一画：GameMode 只存"还剩多亮"和"什么颜色"
+		GM->ArtFlash = 1.f;
+		GM->ArtFlashColor = Col;
 	}
 
 	AddNotice(FString::Printf(TEXT("%s%s"),
@@ -1114,11 +1133,25 @@ void AFSPlayerChar::Tick(float DeltaSeconds)
 	Shake = FMath::Max(0.f, Shake - Shake * 9.f * DeltaSeconds - 1.5f * DeltaSeconds);
 	ShakeT += DeltaSeconds;
 
+	// 开招推近：二次方衰减 → 落手瞬间顶到底，0.1 秒内收回一半，读起来是"弹一下"，
+	// 线性衰减会变成"慢慢飘走"，反而拖慢节奏。
+	CastPunch = FMath::Max(0.f, CastPunch - DeltaSeconds / FMath::Max(0.01f, CastPunchDur));
+	CamPullNow = -CastPunchPull * CastPunch * CastPunch;
+	CamPullPeak = FMath::Min(CamPullPeak, CamPullNow);
+
 	if (SpringArm)
 	{
 		const float OX = Shake * FMath::Sin(ShakeT * 41.f) * 0.55f;
 		const float OY = Shake * FMath::Cos(ShakeT * 37.f) * 0.55f;
 		SpringArm->SetRelativeRotation(FRotator(CamPitchBase + OY, OX, 0.f));
+
+		// 只缩臂长会读成"镜头变近了"，FOV 一起收才有"被压过来"的冲击感。
+		// 两个量都从基准算，绝不累加，所以掉帧或被 hitstop 拉长也不会漂。
+		SpringArm->TargetArmLength = CamBaseArm + CamPullNow;
+		if (Camera)
+		{
+			Camera->SetFieldOfView(CamBaseFov + CamPullNow * 0.022f);
+		}
 	}
 
 	if (!IsAlive())

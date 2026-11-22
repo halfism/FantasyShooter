@@ -27,7 +27,8 @@ enum class EFSSfx : uint8
 	Guardian,       // 守护兽降临
 	GuardianShot,   // 守护兽开火
 	GameOver,       // 结算
-	Beep            // UI / 天气提示
+	Beep,           // UI / 天气提示
+	ArtCast         // 流派主动技起手：低频砸地 + 上升扫频，三招共用只换音高
 };
 
 /** 一个发声单元（纯 C++ 结构，供音频线程使用） */
