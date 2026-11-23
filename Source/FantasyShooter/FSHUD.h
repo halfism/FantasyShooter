@@ -28,6 +28,8 @@ protected:
 	/** 第 30 波通关的结算。和 GameOver 是两套画面——"赢"和"输"不该长得像 */
 	void DrawVictory(AFSGameMode* GM, float U);
 	void DrawPauseMenu(AFSGameMode* GM, float U);
+	/** 神龛（局外永久成长）面板 */
+	void DrawShrine(AFSGameMode* GM, float U);
 	/** 清波后的三选一赐福卡 */
 	void DrawBlessing(AFSGameMode* GM, float U);
 	/** 赐福图标：全部用线段/矩形现画，不依赖贴图 */

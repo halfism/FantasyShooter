@@ -171,6 +171,65 @@ public:
 	int32 LanguageMode = 0;
 	static constexpr int32 MenuItemCount = 7;
 
+	// ---- 神龛（局外永久成长）
+	/**
+	 * 面板状态。和暂停菜单分开：神龛在"没有在打"的三个阶段都能开
+	 * （标题 / 阵亡 / 通关），而暂停菜单是局内的东西。
+	 */
+	bool bShrineOpen = false;
+	int32 ShrineSel = 0;
+	int32 ShrineRanks[(int32)EFSShrine::Count] = {};
+	/** 刚买到一级的绿色脉冲 / 买不起的红色脉冲（1→0），只给面板做反馈 */
+	float ShrineHit = 0.f;
+	float ShrineDeny = 0.f;
+	/** 本局神龛加成是否已经灌进玩家。StartGame 清位，Tick 里补灌（防玩家生成晚于开局） */
+	bool bShrineAppliedThisRun = false;
+	/** 累计金币里已经花掉的部分（存档字段）。可用余额 = TotalCoins - SpentCoins */
+	int32 SpentCoins = 0;
+	static constexpr int32 ShrineItemCount = (int32)EFSShrine::Count;
+
+	/** 神龛可以打开的阶段：只有"不在战斗中"的时候 */
+	bool CanOpenShrine() const
+	{
+		return Phase == EFSPhase::Title || Phase == EFSPhase::GameOver || Phase == EFSPhase::Victory;
+	}
+	int32 GetCoinBalance() const { return FMath::Max(0, TotalCoins - SpentCoins); }
+	int32 ShrineRank(EFSShrine S) const
+	{
+		const int32 I = (int32)S;
+		return (I >= 0 && I < ShrineItemCount) ? FMath::Clamp(ShrineRanks[I], 0, FSDefs::ShrineMaxRank) : 0;
+	}
+	/** 下一级的价钱；已满级返回 -1 */
+	int32 ShrineCost(EFSShrine S) const
+	{
+		const int32 R = ShrineRank(S);
+		if (R >= FSDefs::ShrineMaxRank)
+		{
+			return -1;
+		}
+		return FSDefs::ShrineCostBase(S) * (R + 1);
+	}
+	bool CanBuyShrine(EFSShrine S) const
+	{
+		const int32 C = ShrineCost(S);
+		return C > 0 && GetCoinBalance() >= C;
+	}
+	/** 买一级。返回是否真的买到了（钱不够 / 已满级都是 false） */
+	bool BuyShrine(EFSShrine S);
+	void ToggleShrine();
+	void ShrineMove(int32 Delta);
+	void ShrineActivate();
+	bool ShrineClickAt(float MouseX, float MouseY, float ScreenW, float ScreenH);
+
+	/** 神龛累计加成（开局一次性加到玩家身上） */
+	int32 ShrineBonusHP() const { return ShrineRank(EFSShrine::Vigor) * FSDefs::ShrineRankBase(EFSShrine::Vigor); }
+	float ShrineDmgMul() const { return 1.f + ShrineRank(EFSShrine::Might) * FSDefs::ShrineRankBase(EFSShrine::Might) / 100.f; }
+	float ShrineRofMul() const { return 1.f + ShrineRank(EFSShrine::Rapid) * FSDefs::ShrineRankBase(EFSShrine::Rapid) / 100.f; }
+	float ShrineMoveMul() const { return 1.f + ShrineRank(EFSShrine::Swift) * FSDefs::ShrineRankBase(EFSShrine::Swift) / 100.f; }
+	float ShrineCoinMul() const { return 1.f + ShrineRank(EFSShrine::Fortune) * FSDefs::ShrineRankBase(EFSShrine::Fortune) / 100.f; }
+	/** 开局把神龛加成灌进玩家（StartGame 调一次；重复调用不会叠加，玩家侧有闸） */
+	void ApplyShrineToPlayer();
+
 	void TogglePause();
 	void SetPaused(bool b);
 	void MenuMove(int32 Delta);
@@ -221,6 +280,12 @@ protected:
 	void SpawnDrop(const FVector& Loc, EFSPickupKind Kind, EFSWeapon Weapon, int32 Value);
 	void LoadMeta();
 	void SaveMeta();
+	/** 神龛改动后立刻落盘（不动战绩口径） */
+	void SaveShrine();
+	/** -fsshrtest：购买 / 上限 / 加成的内存推演断言 */
+	void RunShrineTest();
+	/** 自检期间不落盘，否则自动化会把假数据写进真存档 */
+	bool bShrineDryRun = false;
 	void RefreshUnlocks();
 	void GrantUpgrade();
 

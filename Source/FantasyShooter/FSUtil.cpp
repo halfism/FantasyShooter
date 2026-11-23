@@ -592,4 +592,19 @@ namespace FSUtil
 		R.Y = ScreenH * 0.56f - R.H * 0.5f;
 		return R;
 	}
+
+	FFSRect ShrineRowRect(float ScreenW, float ScreenH, int32 Index)
+	{
+		// 整套尺寸都以 U 为单位（U = ScreenH/700）：这样 1080p 与 4K 下面板
+		// 的"行高 / 行距 / 顶部留白"比例完全一致，不会出现 4K 下挤出屏幕。
+		// 172*U 是第一行的顶：上面还要放标题、副标题、余额、累计四行。
+		const float U = UIScale(ScreenH);
+		FFSRect R;
+		R.W = 760.f * U;
+		R.H = 66.f * U;
+
+		R.X = ScreenW * 0.5f - R.W * 0.5f;
+		R.Y = 172.f * U + Index * (R.H + 10.f * U);
+		return R;
+	}
 }

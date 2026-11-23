@@ -914,6 +914,25 @@ void AFSPlayerChar::ApplyUpgrade(int32 Index, int32 Rarity, bool bCountPath)
 	}
 }
 
+void AFSPlayerChar::ApplyShrineBonus(int32 BonusHP, float DmgMul, float RofMul, float MoveMul)
+{
+	if (bShrineApplied)
+	{
+		return;
+	}
+	bShrineApplied = true;
+
+	if (BonusHP > 0)
+	{
+		// 加算而不是乘算：面板写"+10 生命 / 级"，玩家会拿它和血条上的绝对值对账
+		MaxHP += (float)BonusHP;
+		HP += (float)BonusHP;
+	}
+	UpDmg *= FMath::Max(0.01f, DmgMul);
+	UpRof *= FMath::Max(0.01f, RofMul);
+	UpMove = FMath::Min(1.75f, UpMove * FMath::Max(0.01f, MoveMul));
+}
+
 void AFSPlayerChar::ApplyPathOverflow(EFSPath P, float R)
 {
 	// 溢出是残局的"零钱"：单层很小，靠数量累积，但不能小到没感觉。
@@ -1673,7 +1692,8 @@ void AFSPlayerController::OnFireStart(const FInputActionValue& Value)
 {
 	if (AFSGameMode* GM = AFSGameMode::Get(this))
 	{
-		if (GM->bPaused)
+		// 神龛开着时点击是"买"，不能同时把这一局开出去
+		if (GM->bPaused || GM->bShrineOpen)
 		{
 			return;
 		}
@@ -1737,7 +1757,8 @@ void AFSPlayerController::OnConfirm(const FInputActionValue& Value)
 {
 	if (AFSGameMode* GM = AFSGameMode::Get(this))
 	{
-		if (GM->bPaused)
+		// 神龛开着时，回车是用来买东西的，不能再顺手开一局
+		if (GM->bPaused || GM->bShrineOpen)
 		{
 			return;
 		}
@@ -1792,6 +1813,53 @@ void AFSPlayerController::PlayerTick(float DeltaTime)
 	Super::PlayerTick(DeltaTime);
 
 	AFSGameMode* GM = AFSGameMode::Get(this);
+
+	// ---- 神龛面板：优先级最高，它盖着底下的标题 / 结算画面
+	// 先判它再判 ESC，否则 ESC 会被上面那条暂停分支抢走，面板关不掉。
+	if (GM && GM->bShrineOpen)
+	{
+		if (WasInputKeyJustPressed(EKeys::G) || WasInputKeyJustPressed(EKeys::Escape)
+			|| WasInputKeyJustPressed(EKeys::Gamepad_Special_Left))
+		{
+			GM->ToggleShrine();
+			return;
+		}
+		if (WasInputKeyJustPressed(EKeys::Up) || WasInputKeyJustPressed(EKeys::W)
+			|| WasInputKeyJustPressed(EKeys::Gamepad_DPad_Up))
+		{
+			GM->ShrineMove(-1);
+		}
+		else if (WasInputKeyJustPressed(EKeys::Down) || WasInputKeyJustPressed(EKeys::S)
+			|| WasInputKeyJustPressed(EKeys::Gamepad_DPad_Down))
+		{
+			GM->ShrineMove(1);
+		}
+
+		if (WasInputKeyJustPressed(EKeys::Enter) || WasInputKeyJustPressed(EKeys::SpaceBar)
+			|| WasInputKeyJustPressed(EKeys::Gamepad_FaceButton_Bottom))
+		{
+			GM->ShrineActivate();
+		}
+
+		if (WasInputKeyJustPressed(EKeys::LeftMouseButton))
+		{
+			int32 VX = 0, VY = 0;
+			GetViewportSize(VX, VY);
+			float MX = 0.f, MY = 0.f;
+			if (GetMousePosition(MX, MY))
+			{
+				GM->ShrineClickAt(MX, MY, (float)VX, (float)VY);
+			}
+		}
+		return;
+	}
+
+	// 打开神龛：只有"没在打"的三个阶段认这个键
+	if (GM && WasInputKeyJustPressed(EKeys::G) && GM->CanOpenShrine() && !GM->bPaused)
+	{
+		GM->ToggleShrine();
+		return;
+	}
 
 	// ---- 暂停菜单：ESC / 手柄 Back 开关
 	// 注意：不能用手柄 Start，它已经绑给 IA_Confirm（开始 / 重开），会一开局就弹菜单

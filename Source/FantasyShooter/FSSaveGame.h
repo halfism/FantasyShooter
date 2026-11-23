@@ -43,4 +43,15 @@ public:
 	/** 最快通关用时（秒）。0 = 还没有记录 */
 	UPROPERTY()
 	float BestClearTime = 0.f;
+
+	/**
+	 * 神龛各项已购等级（下标 = EFSShrine）。TArray 而不是定长数组：
+	 * UPROPERTY 不支持 C 数组，而"存档里长一截"就是新增项时最自然的兼容方式。
+	 */
+	UPROPERTY()
+	TArray<int32> ShrineRanks;
+
+	/** 已经在神龛里花掉的金币。可用金币 = TotalCoins - SpentCoins */
+	UPROPERTY()
+	int32 SpentCoins = 0;
 };

@@ -262,6 +262,75 @@ namespace FSDefs
 		}
 	}
 
+	// ---- 神龛
+	int32 ShrineRankBase(EFSShrine S)
+	{
+		switch (S)
+		{
+		case EFSShrine::Vigor:   return 10;   // +10 生命
+		case EFSShrine::Might:   return 5;    // +5% 伤害
+		case EFSShrine::Rapid:   return 4;    // +4% 射速
+		case EFSShrine::Swift:   return 3;    // +3% 移速
+		case EFSShrine::Fortune: return 8;    // +8% 金币
+		default:                 return 0;
+		}
+	}
+
+	int32 ShrineCostBase(EFSShrine S)
+	{
+		// 价钱按"越往后越贵"排：锋锐/疾射是直接战力，定得比行速/体魄高；
+		// 天赐影响的是下一局的经济，最贵。
+		switch (S)
+		{
+		case EFSShrine::Vigor:   return 90;
+		case EFSShrine::Might:   return 120;
+		case EFSShrine::Rapid:   return 120;
+		case EFSShrine::Swift:   return 100;
+		case EFSShrine::Fortune: return 150;
+		default:                 return 999;
+		}
+	}
+
+	const TCHAR* ShrineNameCN(EFSShrine S)
+	{
+		switch (S)
+		{
+		case EFSShrine::Vigor:   return TEXT("体  魄");
+		case EFSShrine::Might:   return TEXT("锋  锐");
+		case EFSShrine::Rapid:   return TEXT("疾  射");
+		case EFSShrine::Swift:   return TEXT("行  速");
+		case EFSShrine::Fortune: return TEXT("天  赐");
+		default:                 return TEXT("");
+		}
+	}
+
+	const TCHAR* ShrineNameEN(EFSShrine S)
+	{
+		switch (S)
+		{
+		case EFSShrine::Vigor:   return TEXT("VIGOR");
+		case EFSShrine::Might:   return TEXT("MIGHT");
+		case EFSShrine::Rapid:   return TEXT("RAPID");
+		case EFSShrine::Swift:   return TEXT("SWIFT");
+		case EFSShrine::Fortune: return TEXT("FORTUNE");
+		default:                 return TEXT("");
+		}
+	}
+
+	FLinearColor ShrineColor(EFSShrine S)
+	{
+		// 五项各给一个色相，面板上一眼能对上"我刚点的是哪一条"
+		switch (S)
+		{
+		case EFSShrine::Vigor:   return FLinearColor(0.92f, 0.36f, 0.40f);
+		case EFSShrine::Might:   return FLinearColor(1.00f, 0.60f, 0.26f);
+		case EFSShrine::Rapid:   return FLinearColor(0.42f, 0.82f, 1.00f);
+		case EFSShrine::Swift:   return FLinearColor(0.42f, 0.96f, 0.72f);
+		case EFSShrine::Fortune: return FLinearColor(1.00f, 0.80f, 0.25f);
+		default:                 return FLinearColor(1.f, 1.f, 1.f);
+		}
+	}
+
 	const TCHAR* PathShortCN(EFSPath P)
 	{
 		switch (P)

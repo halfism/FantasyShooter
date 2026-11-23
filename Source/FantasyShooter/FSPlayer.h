@@ -95,6 +95,17 @@ public:
 	void ApplyUpgrade(int32 Index, int32 Rarity = 0, bool bCountPath = true);
 	/** 流派觉醒后继续叠加时的溢出加成（ApplyUpgrade 内部调用） */
 	void ApplyPathOverflow(EFSPath P, float RarityMul);
+	/**
+	 * 神龛（局外永久成长）落地：开局由 GameMode 调一次。
+	 * 内部有闸，重复调用不会叠乘；生命是加算，其余三项直接乘进局内乘区。
+	 */
+	void ApplyShrineBonus(int32 BonusHP, float DmgMul, float RofMul, float MoveMul);
+	bool IsShrineApplied() const { return bShrineApplied; }
+	/** 自检读实际生效值：改完 MaxHP / 乘区一定要能读回来，否则面板数字只是摆设 */
+	float GetMaxHealth() const { return MaxHP; }
+	float GetDamageMulTotal() const { return UpDmg; }
+	float GetRofMulTotal() const { return UpRof; }
+	float GetMoveMulTotal() const { return UpMove; }
 	/** 增益名称（中/英），HUD 与提示共用 */
 	static void UpgradeName(int32 Index, const TCHAR*& OutCN, const TCHAR*& OutEN);
 	const FString& GetNotice() const { return NoticeText; }
@@ -249,6 +260,8 @@ protected:
 	float UpLeech = 0.f;       // 嗜血：每次击杀回复的生命
 	int32 UpgradeCount = 0;
 	int32 UpStacks[(int32)EFSUpgrade::Count] = {};
+	/** 神龛加成是否已经灌过（每次新角色只灌一次，避免重复叠乘） */
+	bool bShrineApplied = false;
 
 	// ---- 流派：同类赐福累计到 3 层触发觉醒，给一条专属被动
 	int32 PathStacks[(int32)EFSPath::Count] = {};

@@ -81,6 +81,12 @@ void AFSHUD::DrawHUD()
 		DrawBlessing(GM, U);
 	}
 
+	// 神龛：只在标题 / 阵亡 / 通关三页能开，所以它盖住那些结算画面是合理的
+	if (GM->bShrineOpen && !GM->bPaused)
+	{
+		DrawShrine(GM, U);
+	}
+
 	// 暂停面板永远画在最上层（标题页也可以调出，方便退出）
 	if (GM->bPaused)
 	{
@@ -905,7 +911,18 @@ void AFSHUD::DrawTitle(AFSGameMode* GM, float U)
 		FLinearColor(1.f, 1.f, 1.f, Pulse), true);
 
 	Txt(FS_FMT(TEXT("历史最佳：%d 波    累计击杀 %d    最高连击 x%d"), TEXT("BEST: WAVE %d    TOTAL KILLS %d    BEST COMBO x%d"),
-		GM->BestWave, GM->TotalKills, GM->BestCombo), CX, SH * 0.86f, 1.0f * U, FSPal::Dim, true);
+		GM->BestWave, GM->TotalKills, GM->BestCombo), CX, SH * 0.845f, 1.0f * U, FSPal::Dim, true);
+
+	// 神龛入口：有钱的时候闪起来，没钱也留着（否则玩家永远发现不了有这个东西）
+	{
+		const int32 Bal = GM->GetCoinBalance();
+		const bool bCan = GM->CanBuyShrine(EFSShrine::Vigor) || GM->CanBuyShrine(EFSShrine::Might)
+			|| GM->CanBuyShrine(EFSShrine::Rapid) || GM->CanBuyShrine(EFSShrine::Swift)
+			|| GM->CanBuyShrine(EFSShrine::Fortune);
+		const float A = bCan ? (0.70f + 0.30f * FMath::Sin(GetWorld()->GetTimeSeconds() * 3.1f)) : 0.55f;
+		Txt(FS_FMT(TEXT("G  神龛   ·   可用金币 %d"), TEXT("G  SHRINE   -   %d COINS"), Bal),
+			CX, SH * 0.895f, 1.25f * U, FLinearColor(FSPal::Gold.R, FSPal::Gold.G, FSPal::Gold.B, A), true);
+	}
 }
 
 void AFSHUD::DrawGameOver(AFSGameMode* GM, float U)
@@ -932,6 +949,13 @@ void AFSHUD::DrawGameOver(AFSGameMode* GM, float U)
 	const float Pulse = 0.6f + 0.4f * FMath::Sin(GetWorld()->GetTimeSeconds() * 3.2f);
 	Txt(FSUtil::L(TEXT("按 R 或 点击左键 重新开始"), TEXT("PRESS R OR CLICK TO RETRY")), CX, SH * 0.70f,
 		1.4f * U, FLinearColor(1.f, 1.f, 1.f, Pulse), true);
+
+	// 死了正是想"下次更强"的时候，把神龛摆在这里比藏在标题页有用
+	if (GM->GetCoinBalance() > 0)
+	{
+		Txt(FS_FMT(TEXT("G  神龛   ·   用 %d 金币换永久强化"), TEXT("G  SHRINE   -   SPEND %d COINS ON PERMANENT BOONS"),
+			GM->GetCoinBalance()), CX, SH * 0.775f, 1.15f * U, FSPal::Gold, true);
+	}
 
 	Txt(FSUtil::L(TEXT("ESC 暂停 / 退出"), TEXT("ESC = PAUSE / QUIT")), CX, SH * 0.94f,
 		1.0f * U, FSPal::Dim, true);
@@ -1017,7 +1041,13 @@ void AFSHUD::DrawVictory(AFSGameMode* GM, float U)
 	Txt(FSUtil::L(TEXT("E     继 续 无 尽 （没有终点了）"), TEXT("E     CONTINUE ENDLESS (NO FINISH LINE)")),
 		CX, SH * 0.788f, 1.08f * U, FLinearColor(Gold.R, Gold.G, Gold.B, 0.90f), true);
 
-	Txt(FSUtil::L(TEXT("ESC 暂停 / 退出"), TEXT("ESC = PAUSE / QUIT")), CX, SH * 0.845f,
+	if (GM->GetCoinBalance() > 0)
+	{
+		Txt(FS_FMT(TEXT("G  神龛   ·   用 %d 金币换永久强化"), TEXT("G  SHRINE   -   SPEND %d COINS ON PERMANENT BOONS"),
+			GM->GetCoinBalance()), CX, SH * 0.842f, 1.05f * U, FSPal::Gold, true);
+	}
+
+	Txt(FSUtil::L(TEXT("ESC 暂停 / 退出"), TEXT("ESC = PAUSE / QUIT")), CX, SH * 0.892f,
 		0.95f * U, FSPal::Dim, true);
 }
 
@@ -1096,7 +1126,159 @@ void AFSHUD::DrawPauseMenu(AFSGameMode* GM, float U)
 	}
 }
 
-// ------------------------------------------------------------------ 清波赐福卡
+// ------------------------------------------------------------------ 神龛（局外永久成长）
+
+namespace
+{
+	/**
+	 * 一行的效果文案。基础量从 FSDefs 取，和真正生效的数值同源——
+	 * 面板写"+5% 伤害"而实际给 4%，是这类系统最容易犯、也最难被发现的错。
+	 */
+	FString ShrineEffectText(EFSShrine S, int32 Rank)
+	{
+		const int32 B = FSDefs::ShrineRankBase(S);
+		const int32 Now = B * Rank;
+		switch (S)
+		{
+		case EFSShrine::Vigor:
+			return FS_FMT(TEXT("生命上限 +%d / 级        当前 +%d"),
+				TEXT("MAX HP +%d / RANK        NOW +%d"), B, Now);
+		case EFSShrine::Might:
+			return FS_FMT(TEXT("伤害 +%d%% / 级        当前 +%d%%"),
+				TEXT("DAMAGE +%d%% / RANK        NOW +%d%%"), B, Now);
+		case EFSShrine::Rapid:
+			return FS_FMT(TEXT("射速 +%d%% / 级        当前 +%d%%"),
+				TEXT("FIRE RATE +%d%% / RANK        NOW +%d%%"), B, Now);
+		case EFSShrine::Swift:
+			return FS_FMT(TEXT("移速 +%d%% / 级        当前 +%d%%"),
+				TEXT("MOVE SPEED +%d%% / RANK        NOW +%d%%"), B, Now);
+		case EFSShrine::Fortune:
+			return FS_FMT(TEXT("金币获取 +%d%% / 级        当前 +%d%%"),
+				TEXT("COIN GAIN +%d%% / RANK        NOW +%d%%"), B, Now);
+		default:
+			return FString();
+		}
+	}
+}
+
+void AFSHUD::DrawShrine(AFSGameMode* GM, float U)
+{
+	// 0.965 而不是 0.90：标题页的大字会从半透明底上透出来，
+	// 面板边缘出现"奇幻射手"的残影，看着像渲染没擦干净。
+	DrawRect(FLinearColor(0.f, 0.f, 0.012f, 0.965f), 0.f, 0.f, SW, SH);
+
+	const float CX = SW * 0.5f;
+	// 全部尺寸走 U（= SH/700），和 ShrineRowRect 同一套刻度：
+	// 用屏幕百分比排头部、用 U 排行，两者在 1080p 与 4K 下的比例会打架。
+	// 字号 N 的实际像素高 ≈ 20*N*U，行距按这个估，别给"看起来差 10"的数。
+	Txt(FSUtil::L(TEXT("神  龛"), TEXT("SHRINE")), CX, 30.f * U, 2.2f * U,
+		FLinearColor(0.96f, 0.94f, 0.86f), true);
+	Txt(FSUtil::L(TEXT("跨 局 永 久 强 化  ·  开 局 生 效"), TEXT("PERMANENT BOONS  -  APPLIED AT RUN START")),
+		CX, 80.f * U, 0.95f * U, FSPal::Cyan, true);
+
+	// 余额：这是玩家唯一要看的数字，给足字号
+	const int32 Bal = GM->GetCoinBalance();
+	Txt(FS_FMT(TEXT("可用金币   %d"), TEXT("AVAILABLE   %d"), Bal), CX, 106.f * U,
+		1.35f * U, Bal > 0 ? FSPal::Gold : FSPal::Dim, true);
+	Txt(FS_FMT(TEXT("累计金币 %d"), TEXT("LIFETIME %d"), GM->TotalCoins), CX, 138.f * U,
+		0.78f * U, FSPal::Dim, true);
+
+	for (int32 i = 0; i < AFSGameMode::ShrineItemCount; ++i)
+	{
+		const EFSShrine S = (EFSShrine)i;
+		const FFSRect R = FSUtil::ShrineRowRect(SW, SH, i);
+		const FLinearColor Col = FSDefs::ShrineColor(S);
+		const int32 Rank = GM->ShrineRank(S);
+		const int32 Cost = GM->ShrineCost(S);
+		const bool bMax = (Cost < 0);
+		const bool bAfford = (Cost > 0 && Bal >= Cost);
+		const bool bSel = (i == GM->ShrineSel);
+
+		// 底色保持中性：选中只靠"亮边框 + 白字 + 左侧色条"表达。
+		// 整行铺一层色相会被读成"这条出问题了"（红色尤其明显），而不是"选中"。
+		FLinearColor Bg = bSel ? FLinearColor(0.034f, 0.046f, 0.070f, 0.96f)
+			: FLinearColor(0.017f, 0.023f, 0.035f, 0.84f);
+		if (bSel && GM->ShrineHit > 0.f)
+		{
+			// 刚买到：整行亮一下，告诉玩家"钱花在这了"
+			const float K = GM->ShrineHit * 0.13f;
+			Bg = FLinearColor(Bg.R + Col.R * K, Bg.G + Col.G * K, Bg.B + Col.B * K, Bg.A);
+		}
+		DrawRect(Bg, R.X, R.Y, R.W, R.H);
+
+		FLinearColor Edge = bSel ? Col : FLinearColor(0.11f, 0.15f, 0.21f, 0.9f);
+		if (bSel && GM->ShrineDeny > 0.f)
+		{
+			Edge = FMath::Lerp(Edge, FSPal::Danger, GM->ShrineDeny);
+		}
+		const float T = bSel ? 2.f * U : 1.f * U;
+		DrawRect(Edge, R.X, R.Y, R.W, T);
+		DrawRect(Edge, R.X, R.Y + R.H - T, R.W, T);
+		DrawRect(Edge, R.X, R.Y, T, R.H);
+		DrawRect(Edge, R.X + R.W - T, R.Y, T, R.H);
+
+		// 左侧色条：五项各一色，一眼对得上"我点的是哪一条"
+		DrawRect(Col, R.X + 12.f * U, R.Y + 10.f * U, 6.f * U, R.H - 20.f * U);
+
+		Txt(FSUtil::L(FSDefs::ShrineNameCN(S), FSDefs::ShrineNameEN(S)),
+			R.X + 32.f * U, R.Y + 10.f * U, 1.2f * U,
+			bSel ? FLinearColor(1.f, 1.f, 1.f) : FLinearColor(0.74f, 0.80f, 0.88f));
+
+		// 等级格子：5 格，点亮的格数就是当前等级
+		const float PipY = R.Y + R.H - 22.f * U;
+		for (int32 k = 0; k < FSDefs::ShrineMaxRank; ++k)
+		{
+			const float PX = R.X + 32.f * U + k * 27.f * U;
+			if (k < Rank)
+			{
+				DrawRect(Col, PX, PipY, 21.f * U, 8.f * U);
+			}
+			else
+			{
+				DrawRect(FLinearColor(0.080f, 0.100f, 0.138f), PX, PipY, 21.f * U, 8.f * U);
+				DrawRect(FLinearColor(0.14f, 0.18f, 0.25f), PX, PipY, 21.f * U, 1.f * U);
+			}
+		}
+
+		Txt(ShrineEffectText(S, Rank), R.X + 228.f * U, R.Y + R.H * 0.5f - 9.f * U, 0.90f * U,
+			FLinearColor(0.62f, 0.69f, 0.78f));
+
+		// 右端价钱：数字与"金币"同一行、右对齐。
+		// 右对齐必须自己算左边界——Txt 的 bCenter=false 是从 X 往右铺，
+		// 直接传右边缘会让数字一半跑到框外（第一版就是这么被裁的）。
+		const float Right = R.X + R.W - 22.f * U;
+		if (bMax)
+		{
+			const FString MaxStr = FSUtil::L(TEXT("满  级"), TEXT("MAX"));
+			Txt(MaxStr, Right - TxtW(MaxStr, 1.15f * U), R.Y + R.H * 0.5f - 13.f * U, 1.15f * U, Col);
+		}
+		else
+		{
+			const FString CostStr = FString::FromInt(Cost);
+			const FString UnitStr = FSUtil::L(TEXT("金币"), TEXT("COINS"));
+			const float CW = TxtW(CostStr, 1.4f * U);
+			const float UW = TxtW(UnitStr, 0.70f * U);
+			const FLinearColor CostCol = bAfford ? FSPal::Gold : FLinearColor(0.58f, 0.31f, 0.33f);
+			Txt(UnitStr, Right - UW, R.Y + R.H * 0.5f - 5.f * U, 0.70f * U,
+				bAfford ? FSPal::Dim : FLinearColor(0.45f, 0.28f, 0.30f));
+			Txt(CostStr, Right - UW - CW - 6.f * U, R.Y + R.H * 0.5f - 15.f * U, 1.4f * U, CostCol);
+		}
+	}
+
+	// 底部操作提示。G 与 ESC 都能关，是因为玩家会本能地按其中一个
+	const float HintY = 562.f * U;
+	Txt(FSUtil::L(TEXT("↑ ↓ 选择   ·   回车 / 空格 购买   ·   G 或 ESC 关闭   ·   也可以直接用鼠标点"),
+		TEXT("UP / DOWN  ·  ENTER TO BUY  ·  G OR ESC TO CLOSE  ·  OR CLICK")),
+		CX, HintY, 0.92f * U, FSPal::White, true);
+
+	if (Bal <= 0)
+	{
+		Txt(FSUtil::L(TEXT("还没有可用金币 — 打一局，攒下来的金币会存进这里"),
+			TEXT("NO COINS YET - PLAY A RUN, YOUR COINS ARE BANKED HERE")),
+			CX, HintY + 28.f * U, 0.82f * U, FSPal::Dim, true);
+	}
+}
+
 
 void AFSHUD::DrawUpgradeIcon(int32 Kind, float CX, float CY, float S, const FLinearColor& Col)
 {

@@ -116,6 +116,36 @@ void AFSGameMode::BeginPlay()
 		UE_LOG(LogTemp, Log, TEXT("[FSTEST] clear records reset (ClearCount=0, BestClearTime=0)"));
 	}
 
+	// ---- 调试：神龛
+	// -fscoins=N    把可用金币抬到 N（截图与手感验证用，不写存档）
+	// -fsshrine     开局直接弹面板
+	// -fsshrinemax  所有项点满（看满级面板长什么样）
+	// -fsshrtest    跑一遍购买/上限/加成断言，只在内存里推演，绝不落盘
+	{
+		FString Arg;
+		if (FParse::Value(FCommandLine::Get(), TEXT("fscoins="), Arg))
+		{
+			// 可用余额 = TotalCoins - SpentCoins，所以把 TotalCoins 抬到 Spent + N
+			TotalCoins = SpentCoins + FMath::Max(0, FCString::Atoi(*Arg));
+			UE_LOG(LogTemp, Log, TEXT("[FSSHRINE] debug coins granted, balance=%d"), GetCoinBalance());
+		}
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("fsshrinemax")))
+	{
+		for (int32 i = 0; i < ShrineItemCount; ++i)
+		{
+			ShrineRanks[i] = FSDefs::ShrineMaxRank;
+		}
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("fsshrtest")))
+	{
+		RunShrineTest();
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("fsshrine")))
+	{
+		bShrineOpen = CanOpenShrine();
+	}
+
 	// 引擎默认 BloomQuality=4、强度 0.675，自发光物件再亮一点就会被糊成"奶白色光团"。
 	// 这里放一个全局后处理只压泛光，不改曝光，保留发光颜色又不至于糊成一片。
 	if (UWorld* W = GetWorld())
@@ -193,6 +223,40 @@ void AFSGameMode::LoadMeta()
 	}
 	LanguageMode = FMath::Clamp(S->LanguageMode, 0, 2);
 	FSUtil::SetLanguageMode(LanguageMode);
+
+	// 神龛：存档里是变长数组，读的时候按当前枚举长度对齐（旧存档没有这一项 → 全 0）
+	for (int32 i = 0; i < ShrineItemCount; ++i)
+	{
+		const int32 V = S->ShrineRanks.IsValidIndex(i) ? S->ShrineRanks[i] : 0;
+		ShrineRanks[i] = FMath::Clamp(V, 0, FSDefs::ShrineMaxRank);
+	}
+	SpentCoins = FMath::Max(0, S->SpentCoins);
+}
+
+/** 神龛改动后立刻落盘：玩家可能在买完就直接关窗口，不该丢掉这笔钱 */
+void AFSGameMode::SaveShrine()
+{
+	if (bShrineDryRun)
+	{
+		return;
+	}
+	UFSSaveGame* S = Cast<UFSSaveGame>(UGameplayStatics::LoadGameFromSlot(TEXT("FS_Meta"), 0));
+	if (!S)
+	{
+		S = Cast<UFSSaveGame>(UGameplayStatics::CreateSaveGameObject(UFSSaveGame::StaticClass()));
+	}
+	if (!S)
+	{
+		return;
+	}
+	S->TotalCoins = FMath::Max(S->TotalCoins, TotalCoins);
+	S->SpentCoins = SpentCoins;
+	S->ShrineRanks.Reset();
+	for (int32 i = 0; i < ShrineItemCount; ++i)
+	{
+		S->ShrineRanks.Add(ShrineRanks[i]);
+	}
+	UGameplayStatics::SaveGameToSlot(S, TEXT("FS_Meta"), 0);
 }
 
 void AFSGameMode::PersistSettings()
@@ -246,6 +310,14 @@ void AFSGameMode::SaveMeta()
 	// 战绩保存时顺手把设置一起带上，避免两份存档互相覆盖
 	S->MasterVolume = FSAudio::GetMasterVolume(this);
 	S->LanguageMode = LanguageMode;
+
+	// 神龛也一起带：SaveMeta 是"从盘上读一份再写回"，不显式带上就会被旧值覆盖
+	S->SpentCoins = SpentCoins;
+	S->ShrineRanks.Reset();
+	for (int32 i = 0; i < ShrineItemCount; ++i)
+	{
+		S->ShrineRanks.Add(ShrineRanks[i]);
+	}
 
 	UGameplayStatics::SaveGameToSlot(S, TEXT("FS_Meta"), 0);
 
@@ -310,6 +382,12 @@ void AFSGameMode::StartGame()
 	ChoiceRarity.Reset();
 	bBossBlessGuarantee = false;
 
+	// 神龛面板在开局时必须收起来，否则会盖着战斗画面
+	bShrineOpen = false;
+	ShrineHit = 0.f;
+	ShrineDeny = 0.f;
+	bShrineAppliedThisRun = false;
+
 	for (const TWeakObjectPtr<AFSEnemy>& W : Enemies)
 	{
 		if (AFSEnemy* E = W.Get())
@@ -325,6 +403,24 @@ void AFSGameMode::StartGame()
 	SetBanner(FSUtil::L(TEXT("生   存"), TEXT("SURVIVE")),
 		FSUtil::L(TEXT("活下来，打得越久分越高"), TEXT("STAY ALIVE AS LONG AS YOU CAN")), 2.4f);
 	FSAudio::Play2D(this, EFSSfx::WaveStart, 0.8f);
+
+	// 神龛加成在这里落地。玩家此刻已经存在（标题页是点出来的），
+	// 万一不存在，Tick 会在 Phase==Playing 时补一次。
+	ApplyShrineToPlayer();
+	if (AFSPlayerChar* P = GetPlayerChar())
+	{
+		bShrineAppliedThisRun = true;
+		if (ShrineBonusHP() > 0 || ShrineRank(EFSShrine::Might) > 0)
+		{
+			// 打的是"玩家身上实际生效的值"，不是面板算出来的数——
+			// 只有这样这条日志才能证明加成真的落地了
+			UE_LOG(LogTemp, Log, TEXT("[FSSHRINE] applied hp=%d dmg=%.2f rof=%.2f move=%.2f coin=%.2f -> playerMaxHp=%.0f dmgMul=%.2f (ranks %d%d%d%d%d)"),
+				ShrineBonusHP(), ShrineDmgMul(), ShrineRofMul(), ShrineMoveMul(), ShrineCoinMul(),
+				P->GetMaxHealth(), P->GetDamageMulTotal(),
+				ShrineRank(EFSShrine::Vigor), ShrineRank(EFSShrine::Might), ShrineRank(EFSShrine::Rapid),
+				ShrineRank(EFSShrine::Swift), ShrineRank(EFSShrine::Fortune));
+		}
+	}
 }
 
 void AFSGameMode::EndGame()
@@ -607,6 +703,216 @@ bool AFSGameMode::MenuClickAt(float MouseX, float MouseY, float ScreenW, float S
 		}
 	}
 	return false;
+}
+
+// ------------------------------------------------------------------ 神龛
+
+void AFSGameMode::ToggleShrine()
+{
+	if (bShrineOpen)
+	{
+		bShrineOpen = false;
+		FSAudio::Play2D(this, EFSSfx::Beep, 0.7f, 0.86f);
+		return;
+	}
+	// 打得正热闹的时候不该能翻商店：只有"没在打"的三个阶段能开
+	if (!CanOpenShrine() || bPaused)
+	{
+		return;
+	}
+	bShrineOpen = true;
+	ShrineSel = 0;
+	ShrineHit = 0.f;
+	ShrineDeny = 0.f;
+	FSAudio::Play2D(this, EFSSfx::Beep, 0.85f, 1.12f);
+}
+
+void AFSGameMode::ShrineMove(int32 Delta)
+{
+	if (!bShrineOpen || Delta == 0)
+	{
+		return;
+	}
+	ShrineSel = (ShrineSel + Delta % ShrineItemCount + ShrineItemCount) % ShrineItemCount;
+	FSAudio::Play2D(this, EFSSfx::Beep, 0.4f, 1.34f);
+}
+
+void AFSGameMode::ShrineActivate()
+{
+	if (bShrineOpen)
+	{
+		BuyShrine((EFSShrine)ShrineSel);
+	}
+}
+
+bool AFSGameMode::BuyShrine(EFSShrine S)
+{
+	const int32 I = (int32)S;
+	if (I < 0 || I >= ShrineItemCount)
+	{
+		return false;
+	}
+
+	const int32 Cost = ShrineCost(S);
+	if (Cost < 0)
+	{
+		// 已满级：不花钱，只给一个"到顶了"的短促提示
+		ShrineDeny = 1.f;
+		FSAudio::Play2D(this, EFSSfx::Beep, 0.45f, 0.66f);
+		return false;
+	}
+	if (GetCoinBalance() < Cost)
+	{
+		ShrineDeny = 1.f;
+		FSAudio::Play2D(this, EFSSfx::Beep, 0.45f, 0.58f);
+		return false;
+	}
+
+	SpentCoins += Cost;
+	ShrineRanks[I] = ShrineRank(S) + 1;
+	ShrineHit = 1.f;
+	ShrineDeny = 0.f;
+	SaveShrine();
+	// 音高随等级往上走：连点五下听得出来"在长"
+	FSAudio::Play2D(this, EFSSfx::Upgrade, 0.95f, 0.98f + 0.07f * ShrineRanks[I]);
+	return true;
+}
+
+bool AFSGameMode::ShrineClickAt(float MouseX, float MouseY, float ScreenW, float ScreenH)
+{
+	if (!bShrineOpen)
+	{
+		return false;
+	}
+	for (int32 i = 0; i < ShrineItemCount; ++i)
+	{
+		if (FSUtil::ShrineRowRect(ScreenW, ScreenH, i).Contains(MouseX, MouseY))
+		{
+			// 第一次点只选中，再点同一行才买：避免误触把攒了半天的钱花掉
+			if (ShrineSel == i)
+			{
+				BuyShrine((EFSShrine)i);
+			}
+			else
+			{
+				ShrineSel = i;
+				FSAudio::Play2D(this, EFSSfx::Beep, 0.45f, 1.28f);
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+void AFSGameMode::ApplyShrineToPlayer()
+{
+	if (AFSPlayerChar* P = GetPlayerChar())
+	{
+		P->ApplyShrineBonus(ShrineBonusHP(), ShrineDmgMul(), ShrineRofMul(), ShrineMoveMul());
+	}
+}
+
+void AFSGameMode::RunShrineTest()
+{
+	// 全部在内存里推演：先把现场存下来，跑完原样放回，绝不写盘。
+	// （BuyShrine 内部会 SaveShrine，靠 bShrineDryRun 拦住。）
+	int32 SaveRanks[(int32)EFSShrine::Count];
+	for (int32 i = 0; i < ShrineItemCount; ++i)
+	{
+		SaveRanks[i] = ShrineRanks[i];
+		ShrineRanks[i] = 0;
+	}
+	const int32 SaveSpent = SpentCoins;
+	const int32 SaveTotal = TotalCoins;
+	const EFSPhase SavePhase = Phase;
+	const int32 SaveCoins = Coins;
+	const int32 SaveXp = Xp;
+	const int32 SaveXpNeed = XpNeed;
+	const int32 SaveLevel = Level;
+
+	bShrineDryRun = true;
+	int32 Fails = 0;
+	auto Check = [&Fails](bool bOk, const TCHAR* What, float Got, float Want)
+	{
+		if (!bOk)
+		{
+			++Fails;
+		}
+		UE_LOG(LogTemp, Log, TEXT("[FSSHRINE] %s %s got=%.1f want=%.1f"),
+			bOk ? TEXT("PASS") : TEXT("FAIL"), What, Got, Want);
+	};
+
+	TotalCoins = 5000;
+	SpentCoins = 0;
+
+	Check(GetCoinBalance() == 5000, TEXT("balance"), (float)GetCoinBalance(), 5000.f);
+	Check(ShrineCost(EFSShrine::Vigor) == 90, TEXT("cost vigor r0"), (float)ShrineCost(EFSShrine::Vigor), 90.f);
+	Check(ShrineCost(EFSShrine::Fortune) == 150, TEXT("cost fortune r0"), (float)ShrineCost(EFSShrine::Fortune), 150.f);
+
+	// 连买 5 级体魄：价钱按 90/180/270/360/450 递增，合计 1350
+	int32 Paid = 0;
+	for (int32 i = 0; i < FSDefs::ShrineMaxRank; ++i)
+	{
+		Paid += ShrineCost(EFSShrine::Vigor);
+		BuyShrine(EFSShrine::Vigor);
+	}
+	Check(ShrineRank(EFSShrine::Vigor) == FSDefs::ShrineMaxRank, TEXT("vigor rank"), (float)ShrineRank(EFSShrine::Vigor), 5.f);
+	Check(Paid == 1350, TEXT("vigor total cost"), (float)Paid, 1350.f);
+	Check(SpentCoins == 1350, TEXT("spent"), (float)SpentCoins, 1350.f);
+	Check(GetCoinBalance() == 3650, TEXT("balance after"), (float)GetCoinBalance(), 3650.f);
+	Check(ShrineBonusHP() == 50, TEXT("bonus hp"), (float)ShrineBonusHP(), 50.f);
+
+	// 满级后不能再买、也不该扣钱
+	Check(ShrineCost(EFSShrine::Vigor) == -1, TEXT("cost at max"), (float)ShrineCost(EFSShrine::Vigor), -1.f);
+	const int32 SpentBefore = SpentCoins;
+	const bool bOverBuy = BuyShrine(EFSShrine::Vigor);
+	Check(!bOverBuy, TEXT("reject past max"), bOverBuy ? 1.f : 0.f, 0.f);
+	Check(SpentCoins == SpentBefore, TEXT("no charge at max"), (float)SpentCoins, (float)SpentBefore);
+
+	// 钱不够时也买不了
+	SpentCoins = TotalCoins;             // 余额归零
+	const int32 RankBefore = ShrineRank(EFSShrine::Might);
+	const bool bPoorBuy = BuyShrine(EFSShrine::Might);
+	Check(!bPoorBuy, TEXT("reject when poor"), bPoorBuy ? 1.f : 0.f, 0.f);
+	Check(ShrineRank(EFSShrine::Might) == RankBefore, TEXT("rank intact when poor"),
+		(float)ShrineRank(EFSShrine::Might), (float)RankBefore);
+	SpentCoins = 0;
+
+	// 五项全满时的乘区
+	for (int32 i = 0; i < ShrineItemCount; ++i)
+	{
+		ShrineRanks[i] = FSDefs::ShrineMaxRank;
+	}
+	Check(FMath::IsNearlyEqual(ShrineDmgMul(), 1.25f), TEXT("dmg mul x1.25"), ShrineDmgMul(), 1.25f);
+	Check(FMath::IsNearlyEqual(ShrineRofMul(), 1.20f), TEXT("rof mul x1.20"), ShrineRofMul(), 1.20f);
+	Check(FMath::IsNearlyEqual(ShrineMoveMul(), 1.15f), TEXT("move mul x1.15"), ShrineMoveMul(), 1.15f);
+	Check(FMath::IsNearlyEqual(ShrineCoinMul(), 1.40f), TEXT("coin mul x1.40"), ShrineCoinMul(), 1.40f);
+
+	// 天赐要真的走到 AddCoins 里：100 币进账应该变成 140
+	Phase = EFSPhase::Playing;
+	Coins = 0;
+	Xp = 0;
+	XpNeed = 1000000;                    // 压住升级，避免自检顺手把玩家强化了
+	Level = 1;
+	AddCoins(100);
+	Check(Coins == 140, TEXT("fortune 100->140"), (float)Coins, 140.f);
+
+	// 还原现场
+	Phase = SavePhase;
+	Coins = SaveCoins;
+	Xp = SaveXp;
+	XpNeed = SaveXpNeed;
+	Level = SaveLevel;
+	TotalCoins = SaveTotal;
+	SpentCoins = SaveSpent;
+	for (int32 i = 0; i < ShrineItemCount; ++i)
+	{
+		ShrineRanks[i] = SaveRanks[i];
+	}
+	bShrineDryRun = false;
+
+	UE_LOG(LogTemp, Log, TEXT("[FSSHRINE] SELFTEST %s fails=%d"),
+		Fails == 0 ? TEXT("PASS") : TEXT("FAIL"), Fails);
 }
 
 FString AFSGameMode::GetMenuItemLabel(int32 Index) const
@@ -1047,6 +1353,14 @@ void AFSGameMode::AddCoins(int32 C)
 	{
 		return;
 	}
+
+	// 神龛「天赐」：金币按比例放大。金币同时是经验，所以它也会顺带加快升级——
+	// 这在设计上是故意的（"贪"的代价是你要先攒够钱才能贪），不去拆成两个乘区。
+	if (Phase == EFSPhase::Playing)
+	{
+		C = FMath::Max(1, FMath::RoundToInt(C * ShrineCoinMul()));
+	}
+
 	Coins += C;
 
 	// 金币同时是经验：这样金币不是单纯的计分板，而是"打得多就变强"的正反馈
@@ -1626,6 +1940,17 @@ void AFSGameMode::Tick(float DeltaSeconds)
 		StopHitStop();
 	}
 
+	// ---- 神龛面板的反馈脉冲（用真实 DeltaSeconds；暂停时玩家也看不见它）
+	ShrineHit = FMath::Max(0.f, ShrineHit - DeltaSeconds * 2.2f);
+	ShrineDeny = FMath::Max(0.f, ShrineDeny - DeltaSeconds * 3.0f);
+
+	// 神龛加成的兜底：玩家生成晚于 StartGame 时，在这里补灌一次
+	if (Phase == EFSPhase::Playing && !bShrineAppliedThisRun && GetPlayerChar())
+	{
+		ApplyShrineToPlayer();
+		bShrineAppliedThisRun = true;
+	}
+
 	// ---- 自动截图调试（-fscapture / -fsauto）
 	{
 		static bool bCapInit = false;
@@ -1990,6 +2315,13 @@ void AFSGameMode::Tick(float DeltaSeconds)
 		{
 			AFSPlayerChar* PP = GetPlayerChar();
 			const double El = FPlatformTime::Seconds() - PBTick;
+
+			// 自检的玩家必须活着，但不能无敌——好几条断言就是"血量必须下降"。
+			// 所以只在 30% 以下补血：既能挡住杂兵把自检打断，也不影响单帧内的前后对比。
+			if (PP && PP->GetHealthPct() < 0.30f)
+			{
+				PP->Heal(999.f);
+			}
 			if (PP && PBStage == 0 && El > 1.5)
 			{
 				SpawnQueue.Reset();
@@ -2567,7 +2899,11 @@ void AFSGameMode::Tick(float DeltaSeconds)
 		if (!bUDInit)
 		{
 			bUDInit = true;
-			bUD = FParse::Param(FCommandLine::Get(), TEXT("fsundying"));
+			// 这个开关是"演示不屈"，不是无敌：它会在 7.8 秒时自己吃一发 9999，
+			// 把玩家留在 0.5% 血。和 -fsprobe 一起跑会把自检打断（自检后半段还活着的
+			// 前提是玩家能扛住普通杂兵），所以两者互斥。
+			bUD = FParse::Param(FCommandLine::Get(), TEXT("fsundying"))
+				&& !FParse::Param(FCommandLine::Get(), TEXT("fsprobe"));
 			UDStart = FPlatformTime::Seconds();
 		}
 		if (bUD)

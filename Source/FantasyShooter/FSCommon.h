@@ -54,6 +54,22 @@ enum class EFSPhase : uint8
 	Victory
 };
 
+/**
+ * 神龛：跨局保留的永久强化。
+ * 用"累计金币 - 已花费金币"购买，每项 5 级，开局时一次性加到玩家身上。
+ * 它的存在是为了给局外攒下来的金币一个出口：没有出口的货币等于计分板。
+ */
+UENUM()
+enum class EFSShrine : uint8
+{
+	Vigor,    // 体魄：+10 最大生命 / 级
+	Might,    // 锋锐：+5% 伤害 / 级
+	Rapid,    // 疾射：+4% 射速 / 级
+	Swift,    // 行速：+3% 移速 / 级
+	Fortune,  // 天赐：+8% 金币 / 级
+	Count
+};
+
 /** 掉落物类型 */
 UENUM()
 enum class EFSPickupKind : uint8
@@ -224,6 +240,16 @@ namespace FSDefs
 
 	/** 流派觉醒需要累计的层数 */
 	static constexpr int32 PathAwakenStacks = 3;
+
+	// ---- 神龛（局外永久成长）
+	/** 每一项的等级上限。5 级 × 5 项 ≈ 8700 币，约十几个满局才能点满 */
+	static constexpr int32 ShrineMaxRank = 5;
+	/** 单件神龛的效果阶梯。数值放在这里，C++ 与 HUD 文案共用一份，避免"面板写 +5% 实际给 4%" */
+	int32 ShrineRankBase(EFSShrine S);      // 每级的基础量（生命是点数，其余是百分比）
+	int32 ShrineCostBase(EFSShrine S);      // 第 1 级的价钱，之后每级 +base
+	const TCHAR* ShrineNameCN(EFSShrine S);
+	const TCHAR* ShrineNameEN(EFSShrine S);
+	FLinearColor ShrineColor(EFSShrine S);
 
 	// ---- 流派主动技
 	/** 主动技所属的流派（None 返回 Fury 占位，调用方不该对 None 取色） */

@@ -107,6 +107,9 @@ namespace FSUtil
 
 	/** 赐福卡片矩形：同上，绘制与点击命中必须走同一份计算 */
 	FFSRect BlessingCardRect(float ScreenW, float ScreenH, float U, int32 Index, int32 Count);
+
+	/** 神龛面板里第 Index 行的矩形（5 项固定，纵向列表） */
+	FFSRect ShrineRowRect(float ScreenW, float ScreenH, int32 Index);
 }
 
 /** 中/英两套格式化字符串，按字体可用性自动选择 */
