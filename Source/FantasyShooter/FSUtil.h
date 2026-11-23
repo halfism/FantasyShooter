@@ -30,6 +30,34 @@ namespace FSUtil
 	/** 取引擎自带的基础几何体: Sphere / Cube / Cylinder / Cone / Plane */
 	UStaticMesh* Mesh(const TCHAR* Name);
 
+	/**
+	 * 取 /Game/Art/Props 下的外部道具网格。Name 形如 "survival_kit/rock_a"。
+	 * 这些是 kenney.nl 的 CC0 低模（Tools/fetch_art.py 下载、import_props.py 导入），
+	 * 与基础体有两点关键差别：
+	 *   1. **枢轴在底面中心**（不是几何中心）——所以摆放时传的就是"落地位置"；
+	 *   2. 各单位原始高度差异很大（草 12cm / 房屋 311cm），所以摆放一律按目标高度缩放。
+	 * 加载失败返回 nullptr（打包漏拷时装饰消失，但不会崩）。
+	 */
+	UStaticMesh* Prop(const TCHAR* Name);
+
+	/**
+	 * 取道具对应的材质。Tint 为白时返回按包共享的 MID（同材质可合批）；
+	 * 需要染色时基于基础材质派生一个新 MID（注意：MID 不能当 MID 的父级）。
+	 */
+	UMaterialInterface* ArtMat(const TCHAR* PropName, UObject* Outer, const FLinearColor& Tint);
+
+	/**
+	 * 告诉道具配色当前是哪个竞技场主题（0 幽蓝 / 1 霜封 / 2 熔岩）。
+	 * 只影响石材的基础色：熔岩场景是暖橙调，冷灰石块会像贴上去的灰纸。
+	 */
+	void SetArtTheme(int32 Theme);
+
+	/** 摆一个外部道具。TargetHeight > 0 时按高度等比缩放，<= 0 用原尺寸 */
+	UStaticMeshComponent* AddProp(
+		AActor* Owner, USceneComponent* Parent, const TCHAR* Name,
+		const FVector& BaseLoc, float TargetHeight, float YawDeg = 0.f,
+		const FLinearColor& Tint = FLinearColor::White);
+
 	UMaterialInterface* MatBase();
 	UMaterialInterface* MatGlow();
 

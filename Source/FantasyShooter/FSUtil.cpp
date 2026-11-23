@@ -1,6 +1,7 @@
 #include "FSUtil.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
+#include "StaticMeshResources.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Engine/Texture2D.h"
@@ -62,6 +63,206 @@ namespace FSUtil
 		}
 		Cache.Add(Key, M);
 		return M;
+	}
+
+	UStaticMesh* Prop(const TCHAR* Name)
+	{
+		if (!Name || !*Name)
+		{
+			return nullptr;
+		}
+		static TMap<FString, UStaticMesh*> Cache;
+		const FString Key(Name);
+		if (UStaticMesh** Found = Cache.Find(Key))
+		{
+			return *Found;
+		}
+
+		// "survival_kit/rock_a" -> "/Game/Art/Props/survival_kit/rock_a.rock_a"
+		FString Dir, Leaf;
+		FString Full(Name);
+		if (!Full.Split(TEXT("/"), &Dir, &Leaf, ESearchCase::IgnoreCase, ESearchDir::FromEnd))
+		{
+			Leaf = Full;
+		}
+		const FString Path = FString::Printf(TEXT("/Game/Art/Props/%s.%s"), *Full, *Leaf);
+
+		UStaticMesh* M = LoadObject<UStaticMesh>(nullptr, *Path);
+		if (M)
+		{
+			M->AddToRoot();
+		}
+		else
+		{
+			// 道具是纯装饰，缺了不该影响战斗，只留一条日志
+			UE_LOG(LogTemp, Warning, TEXT("[FSPROP] missing %s"), *Path);
+		}
+		Cache.Add(Key, M);
+		return M;
+	}
+
+	namespace
+	{
+		/** 当前竞技场主题（0 幽蓝 / 1 霜封 / 2 熔岩），只用来挑石材色。 */
+		int32 GArtTheme = 0;
+
+		/**
+		 * 按模型名给一个纯色。工程本身是"纯色自发光几何"的风格，Kenney 的 colormap
+		 * 贴图在这条无界面导入链路上渲不出来（GPU 侧永远是 32x32 占位），所以改成
+		 * 按类别上色：植被绿 / 旗暗红 / 木作棕 / 金属冷灰 / 石作（按主题微调）。
+		 * 顺序有讲究：iron_fence 要先命中"金属"，不能先被 fence 的"木"抢走。
+		 */
+		FLinearColor PropColor(const TCHAR* InName)
+		{
+			const FString N = FString(InName).ToLower();
+			auto Has = [&N](const TCHAR* K) { return N.Contains(K); };
+
+			if (Has(TEXT("iron")) || Has(TEXT("metal")) || Has(TEXT("anvil")) || Has(TEXT("gate")))
+			{
+				return FLinearColor(0.055f, 0.060f, 0.074f);   // 金属：冷灰
+			}
+			if (Has(TEXT("tree")) || Has(TEXT("pine")) || Has(TEXT("grass")) || Has(TEXT("hedge"))
+				|| Has(TEXT("leaf")) || Has(TEXT("pumpkin")) || Has(TEXT("hay")) || Has(TEXT("bush")))
+			{
+				return FLinearColor(0.028f, 0.098f, 0.036f);   // 植被：暗绿
+			}
+			if (Has(TEXT("flag")) || Has(TEXT("banner")) || Has(TEXT("pennant")))
+			{
+				return FLinearColor(0.120f, 0.026f, 0.023f);   // 旗：暗红
+			}
+			if (Has(TEXT("box")) || Has(TEXT("barrel")) || Has(TEXT("chest")) || Has(TEXT("plank"))
+				|| Has(TEXT("wood")) || Has(TEXT("fence")) || Has(TEXT("bench")) || Has(TEXT("table"))
+				|| Has(TEXT("cart")) || Has(TEXT("coffin")) || Has(TEXT("door")) || Has(TEXT("log"))
+				|| Has(TEXT("trunk")) || Has(TEXT("bedroll")))
+			{
+				return FLinearColor(0.068f, 0.039f, 0.020f);   // 木作：暗棕
+			}
+			// 石作：比地板亮一档，但仍压在"暗色场景里的岩块"这一档上。
+			// M_Art 是 Unlit，线性值直接当亮度；实测屏幕曝光约 ×1.35，所以
+			// 0.078 线性 ≈ 109 sRGB —— 比地板 (22,27,39) 亮，又不刺眼。
+			// 熔岩场景的地面和裂缝是暖橙，冷灰石头会像"贴上去的灰纸"，所以换成暖褐灰。
+			switch (GArtTheme)
+			{
+			case 1:  return FLinearColor(0.082f, 0.090f, 0.104f);   // 霜封：偏冷的浅灰
+			case 2:  return FLinearColor(0.112f, 0.072f, 0.048f);   // 熔岩：暖褐灰
+			default: return FLinearColor(0.078f, 0.084f, 0.105f);   // 幽蓝：蓝灰
+			}
+		}
+	}
+
+	void SetArtTheme(int32 Theme)
+	{
+		GArtTheme = FMath::Clamp(Theme, 0, 2);
+	}
+
+	UMaterialInterface* ArtMat(const TCHAR* PropName, UObject* Outer, const FLinearColor& Tint)
+	{
+		if (!PropName || !*PropName)
+		{
+			return nullptr;
+		}
+		// "survival_kit/tree" -> 包名 survival_kit
+		FString Pack(PropName);
+		int32 Slash = INDEX_NONE;
+		if (Pack.FindChar(TEXT('/'), Slash))
+		{
+			Pack.LeftInline(Slash);
+		}
+
+		static TMap<FString, UMaterialInterface*> BaseCache;
+		UMaterialInterface** FoundBase = BaseCache.Find(Pack);
+		if (!FoundBase)
+		{
+			UMaterialInterface* B = nullptr;
+			const FString MatPath = FString::Printf(TEXT("/Game/Art/Materials/M_Art_%s.M_Art_%s"), *Pack, *Pack);
+			B = LoadObject<UMaterialInterface>(nullptr, *MatPath);
+			if (B)
+			{
+				B->AddToRoot();
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[FSPROP] material missing %s"), *MatPath);
+			}
+			FoundBase = &BaseCache.Add(Pack, B);
+		}
+		UMaterialInterface* Base = *FoundBase;
+		if (!Base)
+		{
+			return nullptr;
+		}
+
+		// 白色 = 用默认类别色；否则用调用方指定的颜色（染色）
+		const FLinearColor C = Tint.Equals(FLinearColor::White, 0.001f) ? PropColor(PropName) : Tint;
+
+		// 同色共享一个 MID（既保持 draw call 紧凑，又让每个类别有独立颜色）
+		const FString Key = FString::Printf(TEXT("%s_%.3f_%.3f_%.3f"), *Pack, C.R, C.G, C.B);
+		static TMap<FString, UMaterialInstanceDynamic*> ColorMids;
+		if (UMaterialInstanceDynamic** Hit = ColorMids.Find(Key))
+		{
+			return *Hit;
+		}
+		if (UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(Base, GetTransientPackage()))
+		{
+			MID->SetVectorParameterValue(TEXT("Tint"), C);
+			MID->AddToRoot();
+			ColorMids.Add(Key, MID);
+			return MID;
+		}
+		return Base;
+	}
+
+	UStaticMeshComponent* AddProp(
+		AActor* Owner, USceneComponent* Parent, const TCHAR* Name,
+		const FVector& BaseLoc, float TargetHeight, float YawDeg, const FLinearColor& Tint)
+	{
+		UStaticMesh* M = Prop(Name);
+		if (!M || !Owner)
+		{
+			return nullptr;
+		}
+
+		UStaticMeshComponent* Comp = NewObject<UStaticMeshComponent>(Owner);
+		if (!Comp)
+		{
+			return nullptr;
+		}
+		Comp->SetMobility(EComponentMobility::Movable);
+		Comp->SetStaticMesh(M);
+		Comp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Comp->SetGenerateOverlapEvents(false);
+		Comp->SetCastShadow(false);
+		Comp->bReceivesDecals = false;
+		Comp->SetupAttachment(Parent);
+		Comp->RegisterComponent();
+		Comp->SetRelativeLocation(BaseLoc);
+		Comp->SetRelativeRotation(FRotator(0.f, YawDeg, 0.f));
+
+		// 枢轴在底面，所以高度就是 Z 包围盒的全高（GetBoundingBox 是 FBox，用 Max-Min）
+		float S = 1.f;
+		if (TargetHeight > 0.f)
+		{
+			const FBox Box = M->GetBoundingBox();
+			const float H = static_cast<float>(Box.Max.Z - Box.Min.Z);
+			S = (H > 1.f) ? (TargetHeight / H) : 1.f;
+		}
+		Comp->SetRelativeScale3D(FVector(S));
+
+		Owner->AddInstanceComponent(Comp);
+
+		// 材质：默认用按包共享的 MID（同材质可合批）；要染色时再派生一个专属 MID
+		if (UMaterialInterface* PackMat = ArtMat(Name, Comp, Tint))
+		{
+			Comp->SetMaterial(0, PackMat);
+		}
+		else if (UMaterialInterface* Fallback = M->GetMaterial(0))
+		{
+			Comp->SetMaterial(0, Fallback);
+		}
+
+		UE_LOG(LogTemp, Verbose, TEXT("[FSPROP] add %s loc=(%.0f,%.0f,%.0f) scale=%.2f"),
+			Name, BaseLoc.X, BaseLoc.Y, BaseLoc.Z, S);
+		return Comp;
 	}
 
 	UMaterialInterface* MatBase()

@@ -23,6 +23,12 @@ Build/
 # 但网格源正好同扩展名。只放行这一个目录，别写成全局例外。
 !ArtSource/Meshes/*.obj
 
+# 外部 CC0 资源（kenney.nl）：**只提交原始 zip**，它们是可复现的源。
+# 解压出来的 FBX/GLB/OBJ 三份格式有 43MB，全是派生物，别进库。
+ArtSource/Downloaded/*/
+# Converted 是 Tools/import_props.py 从上面那些 zip 现场生成的中间物（Z-up/厘米制 OBJ）
+ArtSource/Converted/
+
 # 打包产物
 Packaged/
 PackagedShipping/

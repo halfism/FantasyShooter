@@ -20,13 +20,15 @@ UE 5.8 纯 C++ 肉鸽射击游戏。无蓝图；角色、敌人与场景由**程
 | --- | --- |
 | `Source/FantasyShooter` | 全部玩法代码 |
 | `Config` | 默认引擎 / 游戏 / 输入配置 |
-| `Content` | 地图、材质、贴图、字体资产 |
-| `ArtSource` | 美术源文件（`Meshes/*.obj` 由脚本生成，可直接 diff） |
+| `Content` | 地图、材质、字体资产 |
+| `ArtSource` | 美术源文件（`Meshes/*.obj` 由脚本生成；`Downloaded/*.zip` 是外部 CC0 包） |
 | `Tools` | 编译、打包、截图、验证与自动提交脚本 |
 
 ## 美术资产
 
-部件网格不是手工资产，而是脚本生成的凸多面体（`Tools/gen_meshes.py`，无第三方依赖）：
+### 1. 程序化部件（`Tools/gen_meshes.py`）
+
+部件网格不是手工资产，而是脚本生成的凸多面体（无第三方依赖）：
 
 | 部件 | 替换的引擎基础体 | 规格 |
 | --- | --- | --- |
@@ -51,6 +53,43 @@ python Tools\gen_meshes.py     # 生成 ArtSource/Meshes/*.obj
 
 加 `-fsbasicshapes` 可强制退回引擎基础体，用于新旧观感 A/B 对比
 （`Tools\_shot_artpass.bat 0|1`）。
+
+### 2. 外部 CC0 道具（`Tools/fetch_art.py` + `Tools/import_props.py`）
+
+竞技场装饰用的是 [kenney.nl](https://kenney.nl) 的 **CC0** 低模包（可商用、无需署名，
+包内附 `License.txt`）。工程里入库的只有原始 zip：
+
+| 包 | 模型数 | 用途 |
+| --- | --- | --- |
+| `survival-kit` | 80 | 岩石 / 木箱 / 木桶 / 树 / 栅栏 |
+| `castle-kit` | 76 | 岩块 / 石阶 / 城墙 / 塔基 / 树 |
+| `graveyard-kit` | 91 | 墓碑 / 十字架 / 松树 / 铁栏 / 路灯 |
+| `fantasy-town-kit` | 167 | 备用（城墙 / 屋顶 / 摊位） |
+| `mini-dungeon` | 30 | 备用（地牢件） |
+
+```powershell
+python Tools\fetch_art.py      # 下载 + 解压到 ArtSource/Downloaded（需要网络）
+# 转换（Y-up 米制 -> Z-up 厘米制）并导入 /Game/Art/Props（无界面，约 5~8 分钟）
+& "G:\Epic\EpicApps\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
+  "G:\Epic\UnrealProjects\FantasyShooter58\FantasyShooter.uproject" `
+  -run=pythonscript -script="G:\Epic\UnrealProjects\FantasyShooter58\Tools\import_props.py" `
+  -nullrhi -nosplash -nop4 -stdout
+```
+
+注意事项（都是踩过的坑）：
+
+- **材质是纯色，不用贴图。** Kenney 的 `colormap.png` 在 `-nullrhi` commandlet 里
+  拿不到有效 GPU 资源（CPU 侧 512×512 且内容正确，`GetSizeX()` 恒为 32×32，采出来全黑），
+  所以每个包只建一个 `Unlit + VectorParameter("Tint")` 材质，颜色由
+  `FSUtil::PropColor()` 按模型名分类决定（植被绿 / 木作棕 / 石作按主题微调 / 金属冷灰）。
+- **Y-up 要转 Z-up，米要乘 100**，否则模型躺倒、尺寸差 100 倍。
+- **UV 不要翻 V**：Kenney 调色板上半区（v<0.45）是纯黑占位，翻了全部变黑。
+- **丢掉 OBJ 的 `g`/`o` 行**：导入器会拿组名当资产名，带连字符的名字和 `Group` 就是这么来的。
+- 摆放一律按**目标高度**等比缩放（`FSUtil::AddProp` 的 `TargetHeight`），枢轴在底面；
+  全部 `NoCollision`，不挡走位。
+- 装饰分三段铺（详见 `AFSArena::BuildArtProps`）：出生视野内 12 件稀疏竖立件、
+  中景 18 簇、场地边缘 36 簇林墙。**俯视视角下只有竖立件能被认出来**，
+  平板状的东西一律看成地面斑块。
 
 ## 构建与运行
 

@@ -8,6 +8,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Engine/World.h"
 #include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 namespace
 {
@@ -234,6 +235,9 @@ void AFSArena::Build(float HalfSize)
 	default: BuildDecorBlue(); break;
 	}
 
+	// ---- 外部 CC0 道具（真实的低模摆件，与上面的程序化几何互补）
+	BuildArtProps(Variant);
+
 	// ---- 灯光：主光 + 补光 + 轮廓光
 	KeyLight = SpawnLight(W, FVector(0.f, 0.f, 2400.f), FRotator(-54.f, 28.f, 0.f), 1.5f,
 		FLinearColor(1.f, 0.95f, 0.88f));
@@ -402,6 +406,145 @@ void AFSArena::BuildDecorLava()
 		FSUtil::AddShape(this, Root, TEXT("Cylinder"), Base + FVector(0.f, 0.f, 520.f),
 			FVector(1.3f, 1.3f, 0.22f), T.TowerGlow, true, 1.2f);
 	}
+}
+
+// ------------------------------------------------------------------ 外部 CC0 道具
+
+void AFSArena::BuildArtProps(int32 ThemeIdx)
+{
+	// 调试：-fsproptest 把三个道具摆在玩家眼前并染色，用于判断"看不见"到底是
+	// 位置太远还是渲染/材质问题（染色同时验证材质的 Tint 参数）。
+	if (FParse::Param(FCommandLine::Get(), TEXT("fsproptest")))
+	{
+		FSUtil::AddProp(this, Root, TEXT("survival_kit/tree"), FVector(420.f, 0.f, 0.f),
+			300.f, 0.f, FLinearColor(1.0f, 0.15f, 0.10f));
+		FSUtil::AddProp(this, Root, TEXT("survival_kit/box_large"), FVector(0.f, 420.f, 0.f),
+			160.f, 0.f, FLinearColor(0.15f, 1.0f, 0.20f));
+		FSUtil::AddProp(this, Root, TEXT("survival_kit/barrel"), FVector(-420.f, 0.f, 0.f),
+			130.f, 0.f, FLinearColor(0.20f, 0.45f, 1.0f));
+		UE_LOG(LogTemp, Warning, TEXT("[FSARTPROP] PROPTEST placed 3 debug props around player"));
+		return;
+	}
+
+	FSUtil::SetArtTheme(ThemeIdx);
+
+	FRandomStream Rnd(41077 + ThemeIdx * 913);
+
+	// **视野预算**（实测，不是估算）：相机臂 1480 / 俯角 55 / 垂直 FOV 37.4°，
+	// 屏幕底边到顶边对应的地面带是「玩家身后 495 → 前方 802」，更远的东西全在画面上沿
+	// 之外（物件越高越靠上，反而更看不见）。所以不能靠"远处一圈"来当装饰，得按密度分三段：
+	//   A 出生视野（R 470~840）：**稀疏**小碎屑，单件、高 22~40，只做地面质感，不许挡敌；
+	//   B 中景（R 1080~1950）：成对散件，高 40~95，走过去才看清；
+	//   C 场地边缘（R 2150~2800）：高件林墙，靠围墙站成一圈，走到边线才露全貌。
+	// 密度教训：第一版把 22 簇 × 3 件全塞在 R 270~1020，半径小、角距只有 77uu，
+	// 出生画面直接被石头淹没、敌人完全被挡 —— 近场必须"单件 + 稀疏"。
+	int32 Placed = 0;
+
+	// 越界/穿墙保护 + 统一入口
+	auto PutAt = [&](const TCHAR* Name, float H, const FVector& P, float Yaw)
+	{
+		if (P.Size2D() > Half - 60.f)
+		{
+			return;
+		}
+		if (FSUtil::AddProp(this, Root, Name, P, H, Yaw))
+		{
+			++Placed;
+		}
+	};
+
+	auto RingLoc = [&](float Ang, float Rad) { return FVector(FMath::Cos(Ang) * Rad, FMath::Sin(Ang) * Rad, 0.f); };
+
+	// ---- A 段：出生视野内的小碎屑（单件、稀疏、低矮）
+	// 12 件、半径从 525 起 —— 法阵半径 250，玩家出生点周围 500uu 内必须是干净地面。
+	const int32 NearClusters = 12;
+	for (int32 c = 0; c < NearClusters; ++c)
+	{
+		const float Ang = (6.2831853f / NearClusters) * c + Rnd.FRandRange(-0.22f, 0.22f);
+		const float Rad = Rnd.FRandRange(Half * 0.175f, Half * 0.290f);
+		const FVector P = RingLoc(Ang, Rad);
+		const float Y = Rnd.FRandRange(0.f, 360.f);
+
+		switch (ThemeIdx)
+		{
+		case 1:
+			// 俯视视角里"趴着的东西"只会被看成地面斑块，所以近场一律用竖立件：
+			// 木十字 / 十字墓碑 / 路灯柱。墓碑用 gravestone_round 那种平板会看不出来。
+			if (c % 3 == 0)      { PutAt(TEXT("graveyard_kit/cross_wood"),        88.f, P, Y); }
+			else if (c % 3 == 1) { PutAt(TEXT("graveyard_kit/gravestone_cross"),  80.f, P, Y); }
+			else                 { PutAt(TEXT("graveyard_kit/lightpost_single"), 150.f, P, Y); }
+			break;
+		case 2:
+			PutAt((c % 2 == 0) ? TEXT("castle_kit/rocks_large") : TEXT("castle_kit/rocks_small"),
+				52.f, P, Y);
+			break;
+		default:
+			// 不要 rock_flat / rock_flat_grass：它们又薄又宽，30uu 高的时候像地上的灰水洼
+			PutAt((c % 2 == 0) ? TEXT("survival_kit/rock_c") : TEXT("survival_kit/rock_a"),
+				42.f, P, Y);
+			break;
+		}
+	}
+
+	// ---- B 段：中景成对散件
+	const int32 MidClusters = 18;
+	for (int32 c = 0; c < MidClusters; ++c)
+	{
+		const float Ang = (6.2831853f / MidClusters) * c + Rnd.FRandRange(-0.20f, 0.20f) + 0.11f;
+		const float Rad = Rnd.FRandRange(Half * 0.360f, Half * 0.650f);
+		const FVector Center = RingLoc(Ang, Rad);
+		const float Y1 = Rnd.FRandRange(0.f, 360.f);
+		const float Y2 = Rnd.FRandRange(0.f, 360.f);
+
+		switch (ThemeIdx)
+		{
+		case 1:
+			PutAt(TEXT("graveyard_kit/gravestone_cross_large"), 84.f, Center, Y1);
+			PutAt(TEXT("graveyard_kit/pine"),                   250.f, Center + RingLoc(Ang + 1.25f, 110.f), Y2);
+			break;
+		case 2:
+			PutAt(TEXT("castle_kit/rocks_large"),       76.f, Center, Y1);
+			PutAt(TEXT("castle_kit/tower_square_base"), 300.f, Center + RingLoc(Ang + 1.25f, 120.f), Y2);
+			break;
+		default:
+			PutAt(TEXT("survival_kit/rock_b"), 68.f, Center, Y1);
+			PutAt(TEXT("survival_kit/tree"),  230.f, Center + RingLoc(Ang + 1.25f, 110.f), Y2);
+			break;
+		}
+	}
+
+	// ---- C 段：场地边缘的高件林墙（贴着围墙，走到边线才看清）
+	const int32 FarClusters = 36;
+	for (int32 c = 0; c < FarClusters; ++c)
+	{
+		const float Ang = (6.2831853f / FarClusters) * c + Rnd.FRandRange(-0.055f, 0.055f) + 0.04f;
+		const float Rad = Half * Rnd.FRandRange(0.717f, 0.930f);
+		const FVector Center = RingLoc(Ang, Rad);
+		const float Tan = FMath::RadiansToDegrees(Ang) + 90.f;
+		const float Y1 = Rnd.FRandRange(0.f, 360.f);
+
+		switch (ThemeIdx)
+		{
+		case 1:
+			PutAt((c % 5 == 0) ? TEXT("graveyard_kit/pine_crooked") : TEXT("graveyard_kit/pine"),
+				Rnd.FRandRange(300.f, 400.f), Center, Y1);
+			PutAt(TEXT("graveyard_kit/iron_fence"), 118.f, Center + RingLoc(Ang + 0.055f, 150.f), Tan);
+			break;
+		case 2:
+			PutAt((c % 6 == 0) ? TEXT("castle_kit/tower_square_base") : TEXT("castle_kit/tree_large"),
+				Rnd.FRandRange(280.f, 380.f), Center, Y1);
+			PutAt(TEXT("castle_kit/wall_half"), 175.f, Center + RingLoc(Ang + 0.055f, 155.f), Tan);
+			break;
+		default:
+			PutAt((c % 4 == 0) ? TEXT("survival_kit/tree_tall") : TEXT("survival_kit/tree"),
+				Rnd.FRandRange(280.f, 370.f), Center, Y1);
+			PutAt(TEXT("survival_kit/fence_fortified"), 105.f, Center + RingLoc(Ang + 0.055f, 148.f), Tan);
+			break;
+		}
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("[FSARTPROP] theme=%d near=%d mid=%d far=%d placed=%d"),
+		ThemeIdx, NearClusters, MidClusters, FarClusters, Placed);
 }
 
 // ------------------------------------------------------------------ 天气与粒子

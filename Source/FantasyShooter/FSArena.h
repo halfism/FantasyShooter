@@ -51,6 +51,8 @@ protected:
 	void BuildDecorBlue();
 	void BuildDecorFrost();
 	void BuildDecorLava();
+	/** 外部 CC0 道具（kenney.nl）。放在场内边缘环带，不进中心战场 */
+	void BuildArtProps(int32 ThemeIdx);
 
 	TArray<FVector> ParticlePos;
 	TArray<float> ParticleSeed;
