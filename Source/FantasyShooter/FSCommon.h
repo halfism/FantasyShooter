@@ -210,6 +210,13 @@ namespace FSDefs
 	const TCHAR* PathShortCN(EFSPath P);
 	const TCHAR* PathShortEN(EFSPath P);
 	FLinearColor PathColor(EFSPath P);
+	/**
+	 * 特效用的流派色：比 PathColor 深一档。
+	 * PathColor 是给 HUD 当文字色的，浅而亮才好读；可同一个值铺成大面积自发光时，
+	 * 线性→sRGB 会把它抬成奶油色（烈焰裂地实测采到 (223,181,162)，不像火）。
+	 * 大块特效一律走这个深色版本，"橙 / 青 / 绿"三个色相才站得住。
+	 */
+	FLinearColor PathFxColor(EFSPath P);
 
 	/** 觉醒后的专属被动名：狂怒 / 残影 / 不屈 */
 	const TCHAR* PathAwakenNameCN(EFSPath P);

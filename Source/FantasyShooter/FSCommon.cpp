@@ -252,6 +252,16 @@ namespace FSDefs
 		}
 	}
 
+	FLinearColor PathFxColor(EFSPath P)
+	{
+		switch (P)
+		{
+		case EFSPath::Swift: return FLinearColor(0.30f, 0.95f, 1.00f);
+		case EFSPath::Ward:  return FLinearColor(0.16f, 0.85f, 0.38f);
+		default:             return FLinearColor(1.00f, 0.20f, 0.04f);
+		}
+	}
+
 	const TCHAR* PathShortCN(EFSPath P)
 	{
 		switch (P)

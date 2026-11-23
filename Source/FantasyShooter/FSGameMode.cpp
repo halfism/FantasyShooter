@@ -15,6 +15,7 @@
 #include "Engine/World.h"
 #include "Engine/DamageEvents.h"
 #include "Engine/PostProcessVolume.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "Misc/CommandLine.h"
 #include "UnrealClient.h"
@@ -1345,9 +1346,33 @@ void AFSGameMode::AnnouncePathAwaken(EFSPath P)
 		P2->FlashAwakenHalo();
 		if (UWorld* W = GetWorld())
 		{
-			const FLinearColor Col = FSDefs::PathColor(P);
-			AFSFx::Shock(W, P2->GetActorLocation() - FVector(0.f, 0.f, 84.f), 470.f, Col, 0.9f, 2.4f);
-			AFSFx::Burst(W, P2->GetActorLocation() + FVector(0.f, 0.f, 80.f), 230.f, Col, 0.5f, 1.5f);
+			// 地面特效走 PathFxColor：PathColor 太浅，铺成大面积自发光会被 sRGB 抬成奶油色
+			const FLinearColor Col = FSDefs::PathFxColor(P);
+			const FVector Base = P2->GetActorLocation() - FVector(0.f, 0.f, 84.f);
+
+			// 共同的底子：一圈冲击 + 一次爆散。负责"世界为这件事让开"。
+			// 半径收到 300、时长 0.62：裂地会向外撕到 470 以上，一整块 470 的亮盘
+			// 会把裂缝的内半段洗掉，三条流派又变成同一件事。
+			AFSFx::Shock(W, Base, 300.f, Col, 0.62f, 1.3f);
+			AFSFx::Burst(W, P2->GetActorLocation() + FVector(0.f, 0.f, 60.f), 190.f, Col, 0.40f, 1.1f);
+
+			// 各流派自己的落地表达。三招的差别必须在这一帧里读得出来：
+			// 烈焰撕开地面、疾影把人甩在原地、壁垒在身周合拢。
+			AFSPathFx* Sig = nullptr;
+			switch (P)
+			{
+			case EFSPath::Swift:
+				Sig = AFSPathFx::Afterimage(W, Base, P2->GetActorForwardVector(), Col);
+				break;
+			case EFSPath::Ward:
+				Sig = AFSPathFx::Dome(W, Base, Col, 205.f);
+				break;
+			default:
+				Sig = AFSPathFx::Cracks(W, Base, Col, 1.f);
+				break;
+			}
+			UE_LOG(LogTemp, Log, TEXT("[FSPATHSIG] path=%d kind=%s parts=%d (expect > 0)"),
+				(int32)P, Sig ? Sig->GetKindName() : TEXT("null"), Sig ? Sig->GetPartCount() : 0);
 		}
 	}
 }
@@ -2371,15 +2396,28 @@ void AFSGameMode::Tick(float DeltaSeconds)
 				PBStage = 18;
 				PBTick = FPlatformTime::Seconds();
 				AnnouncePathAwaken(EFSPath::Ward);
-				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] awaken impact: punch=%.2f artFlash=%.2f rate=%.1f color=(%.2f,%.2f,%.2f) (expect 1.00 / 1.00 / 1.6 / ward green)"),
-					PP->GetCastPunch(), ArtFlash, ArtFlashRate, ArtFlashColor.R, ArtFlashColor.G, ArtFlashColor.B);
+				int32 SigParts = 0;
+				for (TActorIterator<AFSPathFx> It(GetWorld()); It; ++It)
+				{
+					SigParts += It->GetPartCount();
+				}
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] awaken impact: punch=%.2f artFlash=%.2f rate=%.1f color=(%.2f,%.2f,%.2f) sigParts=%d (expect 1.00 / 1.00 / 1.6 / path color / 24)"),
+					PP->GetCastPunch(), ArtFlash, ArtFlashRate, ArtFlashColor.R, ArtFlashColor.G,
+					ArtFlashColor.B, SigParts);
 			}
-			else if (PBStage == 18 && El > 1.1)
+			// 1.4 秒：落地表达里最长的一招（壁垒 1.05s）必须已经自己 Destroy 掉
+			else if (PBStage == 18 && El > 1.4)
 			{
 				PBStage = 19;
 				bPBDone = true;
-				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] awaken settled: punch=%.2f camPull=%.0f peak=%.0f (expect 0 / 0 / ~-196)"),
-					PP->GetCastPunch(), PP->GetCamPull(), PP->GetCamPullPeak());
+				// 落地表达必须自己退场：特效没收干净会在下一局开局时留一圈残迹
+				int32 LiveSig = 0;
+				for (TActorIterator<AFSPathFx> It(GetWorld()); It; ++It)
+				{
+					++LiveSig;
+				}
+				UE_LOG(LogTemp, Log, TEXT("[FSPROBE] awaken settled: punch=%.2f camPull=%.0f peak=%.0f liveSig=%d (expect 0 / 0 / ~-196 / 0)"),
+					PP->GetCastPunch(), PP->GetCamPull(), PP->GetCamPullPeak(), LiveSig);
 			}
 		}
 	}
@@ -2664,18 +2702,28 @@ void AFSGameMode::Tick(float DeltaSeconds)
 		}
 	}
 
-	// ---- 觉醒摆拍（-fsawakenshot）：第 2 秒真觉醒一次，留"冲击"与"余韵"两张图。
+	// ---- 觉醒摆拍（-fsawakenshot）：第 2 秒真觉醒一次，留"冲击 / 落地 / 余韵"三张图。
 	// 觉醒的推镜比开招更慢（0.95s），所以余韵那张要等到 1.15s 之后才拍得到落回原位的样子。
+	// -fsawaken=<0|1|2> 选哪一系：三招的落地表达各不相同，必须逐个拍。
 	{
 		static bool bAWInit = false;
 		static bool bAW = false;
 		static int32 AWStage = 0;
+		static int32 AWPath = 0;
 		static double AWStart = 0.0;
 		static double AWAt = 0.0;
 		if (!bAWInit)
 		{
 			bAWInit = true;
 			bAW = FParse::Param(FCommandLine::Get(), TEXT("fsawakenshot"));
+			// -fsawkpath=<0|1|2> 指定哪一系觉醒：三招的落地表达各不相同，得逐个拍。
+			// 注意别用 -fsawaken=：那是上一段"流派觉醒验证"的开关，
+			// FParse::Param 会把 -fsawaken=0 也认成 -fsawaken，结果一次觉醒播两遍。
+			FString AWArg;
+			if (FParse::Value(FCommandLine::Get(), TEXT("fsawkpath="), AWArg))
+			{
+				AWPath = FMath::Clamp(FCString::Atoi(*AWArg), 0, (int32)EFSPath::Count - 1);
+			}
 			AWStart = FPlatformTime::Seconds();
 		}
 		if (bAW && Phase == EFSPhase::Playing)
@@ -2688,20 +2736,30 @@ void AFSGameMode::Tick(float DeltaSeconds)
 				AWAt = FPlatformTime::Seconds();
 				// 先真的把这一系叠到觉醒：不然"余韵"那张里光环还是没变色的样子，
 				// 拍出来等于只验证了屏幕脉冲，没验证觉醒本身
-				SP->DebugSetPathStacks(EFSPath::Fury, FSDefs::PathAwakenStacks);
-				AnnouncePathAwaken(EFSPath::Fury);
-				UE_LOG(LogTemp, Log, TEXT("[FSAWD] announce punch=%.2f flash=%.2f rate=%.2f"),
-					SP->GetCastPunch(), ArtFlash, ArtFlashRate);
+				SP->DebugSetPathStacks(EFSPath::Fury, 0);
+				SP->DebugSetPathStacks(EFSPath::Swift, 0);
+				SP->DebugSetPathStacks(EFSPath::Ward, 0);
+				SP->DebugSetPathStacks((EFSPath)AWPath, FSDefs::PathAwakenStacks);
+				AnnouncePathAwaken((EFSPath)AWPath);
+				UE_LOG(LogTemp, Log, TEXT("[FSAWD] announce path=%d punch=%.2f flash=%.2f rate=%.2f"),
+					AWPath, SP->GetCastPunch(), ArtFlash, ArtFlashRate);
 			}
 			if (AWStage == 1 && FPlatformTime::Seconds() - AWAt > 0.10)
 			{
 				AWStage = 2;
 				FScreenshotRequest::RequestScreenshot(
-					FPaths::ProjectSavedDir() / TEXT("Awaken_Impact.png"), false, false);
+					FPaths::ProjectSavedDir() / FString::Printf(TEXT("Awaken%d_Impact.png"), AWPath), false, false);
 			}
-			if (AWStage == 2 && FPlatformTime::Seconds() - AWAt > 1.15)
+			// 0.30 秒那张才是落地表达展开的时候：冲击盘已经淡下去，裂缝/残影/护罩刚到位
+			if (AWStage == 2 && FPlatformTime::Seconds() - AWAt > 0.30)
 			{
 				AWStage = 3;
+				FScreenshotRequest::RequestScreenshot(
+					FPaths::ProjectSavedDir() / FString::Printf(TEXT("Awaken%d_Land.png"), AWPath), false, false);
+			}
+			if (AWStage == 3 && FPlatformTime::Seconds() - AWAt > 1.15)
+			{
+				AWStage = 4;
 				if (SP)
 				{
 					UE_LOG(LogTemp, Log, TEXT("[FSAWD] settled: punch=%.2f camPull=%.0f peak=%.0f flash=%.2f"),
@@ -2709,7 +2767,7 @@ void AFSGameMode::Tick(float DeltaSeconds)
 					SP->DebugDumpRings();
 				}
 				FScreenshotRequest::RequestScreenshot(
-					FPaths::ProjectSavedDir() / TEXT("Awaken_After.png"), false, false);
+					FPaths::ProjectSavedDir() / FString::Printf(TEXT("Awaken%d_After.png"), AWPath), false, false);
 			}
 		}
 	}
