@@ -19,6 +19,10 @@ Build/
 *.log
 *.tmp
 
+# 美术源文件必须进版本库：上面那条 *.obj 是为了挡 C++ 编译中间产物，
+# 但网格源正好同扩展名。只放行这一个目录，别写成全局例外。
+!ArtSource/Meshes/*.obj
+
 # 打包产物
 Packaged/
 PackagedShipping/

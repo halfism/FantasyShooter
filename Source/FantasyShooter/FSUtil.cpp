@@ -9,6 +9,8 @@
 #include "Fonts/CompositeFont.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
 
 namespace FSUtil
 {
@@ -20,8 +22,40 @@ namespace FSUtil
 		{
 			return *Found;
 		}
-		const FString Path = FString::Printf(TEXT("/Engine/BasicShapes/%s.%s"), Name, Name);
-		UStaticMesh* M = LoadObject<UStaticMesh>(nullptr, *Path);
+
+		// 自有低模资产（ArtSource/Meshes/*.obj -> /Game/Art/Meshes，由 Tools/import_art.py 导入）。
+		// 前四个是 BasicShapes 的对位替换：尺寸与枢轴逐位对齐，所以换了不影响任何摆放。
+		// 后两个是"纯新增"部件，引擎里没有对位物，回退名写在 FallbackMap 里。
+		static const TMap<FString, FString> ArtMap = {
+			{ TEXT("Cube"),     TEXT("/Game/Art/Meshes/SM_BevelBox.SM_BevelBox") },
+			{ TEXT("Cylinder"), TEXT("/Game/Art/Meshes/SM_Prism24.SM_Prism24") },
+			{ TEXT("Sphere"),   TEXT("/Game/Art/Meshes/SM_IcoSphere.SM_IcoSphere") },
+			{ TEXT("Cone"),     TEXT("/Game/Art/Meshes/SM_Cone8.SM_Cone8") },
+			{ TEXT("Rock"),     TEXT("/Game/Art/Meshes/SM_Rock.SM_Rock") },
+			{ TEXT("Shard"),    TEXT("/Game/Art/Meshes/SM_Shard.SM_Shard") },
+		};
+		static const TMap<FString, FString> FallbackMap = {
+			{ TEXT("Rock"),  TEXT("Cube") },
+			{ TEXT("Shard"), TEXT("Cone") },
+		};
+
+		UStaticMesh* M = nullptr;
+		// -fsbasicshapes：强制退回引擎基础体，专供 A/B 截图比对新旧观感
+		static const bool bUseArt = !FParse::Param(FCommandLine::Get(), TEXT("fsbasicshapes"));
+		if (bUseArt)
+		{
+			if (const FString* ArtPath = ArtMap.Find(Key))
+			{
+				M = LoadObject<UStaticMesh>(nullptr, **ArtPath);
+			}
+		}
+		if (!M)
+		{
+			const FString* FbName = FallbackMap.Find(Key);
+			const TCHAR* Fb = FbName ? **FbName : Name;
+			const FString Path = FString::Printf(TEXT("/Engine/BasicShapes/%s.%s"), Fb, Fb);
+			M = LoadObject<UStaticMesh>(nullptr, *Path);
+		}
 		if (M)
 		{
 			M->AddToRoot();

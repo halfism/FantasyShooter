@@ -1,6 +1,6 @@
 # FantasyShooter（异界神射手）
 
-UE 5.8 纯 C++ 肉鸽射击游戏。无蓝图，场景与模型全部程序化生成，HUD 用 Canvas 绘制。
+UE 5.8 纯 C++ 肉鸽射击游戏。无蓝图；角色、敌人与场景由**程序化拼装的低模部件**构成，HUD 用 Canvas 绘制。
 
 ## 玩法概要
 
@@ -21,8 +21,36 @@ UE 5.8 纯 C++ 肉鸽射击游戏。无蓝图，场景与模型全部程序化�
 | `Source/FantasyShooter` | 全部玩法代码 |
 | `Config` | 默认引擎 / 游戏 / 输入配置 |
 | `Content` | 地图、材质、贴图、字体资产 |
-| `ArtSource` | 美术源文件 |
+| `ArtSource` | 美术源文件（`Meshes/*.obj` 由脚本生成，可直接 diff） |
 | `Tools` | 编译、打包、截图、验证与自动提交脚本 |
+
+## 美术资产
+
+部件网格不是手工资产，而是脚本生成的凸多面体（`Tools/gen_meshes.py`，无第三方依赖）：
+
+| 部件 | 替换的引擎基础体 | 规格 |
+| --- | --- | --- |
+| `SM_BevelBox` | `Cube` | 倒角立方体，26 面 |
+| `SM_Prism24` | `Cylinder` | 24 边棱柱，直径 100 高 100 |
+| `SM_IcoSphere` | `Sphere` | 80 面低模球 |
+| `SM_Cone8` | `Cone` | 8 边锥 |
+| `SM_Rock` | — | 不规则岩块（场景装饰） |
+| `SM_Shard` | — | 六棱尖晶（场景装饰） |
+
+**尺寸与枢轴和引擎基础体逐位对齐**，所以替换不影响任何既有摆放。映射只在
+`FSUtil::Mesh()` 一处，资产缺失会自动回退到 `BasicShapes`，打包不会变成隐形方块。
+
+```powershell
+python Tools\gen_meshes.py     # 生成 ArtSource/Meshes/*.obj
+# 导入 /Game/Art/Meshes（无界面，约 10s）
+& "G:\Epic\EpicApps\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe" `
+  "G:\Epic\UnrealProjects\FantasyShooter58\FantasyShooter.uproject" `
+  -run=pythonscript -script="G:\Epic\UnrealProjects\FantasyShooter58\Tools\import_art.py" `
+  -nullrhi -nosplash -nop4 -stdout
+```
+
+加 `-fsbasicshapes` 可强制退回引擎基础体，用于新旧观感 A/B 对比
+（`Tools\_shot_artpass.bat 0|1`）。
 
 ## 构建与运行
 

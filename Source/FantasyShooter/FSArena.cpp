@@ -279,6 +279,8 @@ void AFSArena::BuildDecorBlue()
 	}
 
 	// 散落岩块
+	// 用自有部件 SM_Shard（六棱尖晶）/ SM_Rock（不规则多面体）替换等比缩放的 Cone/Cube：
+	// 两者枢轴同为几何中心、尺寸同为 100，所以 Loc 与 Scale 一行都不用动。
 	FRandomStream Rnd(20261115);
 	for (int32 i = 0; i < 34; ++i)
 	{
@@ -288,13 +290,13 @@ void AFSArena::BuildDecorBlue()
 		const float Size = Rnd.FRandRange(0.35f, 1.5f);
 		if (Rnd.FRand() < 0.45f)
 		{
-			FSUtil::AddShape(this, Root, TEXT("Cone"), Loc + FVector(0.f, 0.f, 60.f * Size),
+			FSUtil::AddShape(this, Root, TEXT("Shard"), Loc + FVector(0.f, 0.f, 60.f * Size),
 				FVector(Size, Size, Size * 1.6f), T.PropB,
 				false, 0.f, FRotator(0.f, Rnd.FRandRange(0.f, 360.f), Rnd.FRandRange(-9.f, 9.f)));
 		}
 		else
 		{
-			FSUtil::AddShape(this, Root, TEXT("Cube"), Loc + FVector(0.f, 0.f, 40.f * Size),
+			FSUtil::AddShape(this, Root, TEXT("Rock"), Loc + FVector(0.f, 0.f, 40.f * Size),
 				FVector(Size, Size * 0.9f, Size * 0.8f), T.PropA,
 				false, 0.f, FRotator(0.f, Rnd.FRandRange(0.f, 360.f), 0.f));
 		}
@@ -314,7 +316,8 @@ void AFSArena::BuildDecorFrost()
 		const FVector Loc(FMath::Cos(Ang) * Rad, FMath::Sin(Ang) * Rad, 0.f);
 		const float H = Rnd.FRandRange(3.2f, 7.4f);
 		const float R = Rnd.FRandRange(0.9f, 1.9f);
-		FSUtil::AddShape(this, Root, TEXT("Cone"), Loc + FVector(0.f, 0.f, H * 50.f),
+		// SM_Shard：下半截是尖的、埋在地下，露出来的正好是"石笋"轮廓
+		FSUtil::AddShape(this, Root, TEXT("Shard"), Loc + FVector(0.f, 0.f, H * 50.f),
 			FVector(R, R, H), T.PropA, false, 0.f,
 			FRotator(Rnd.FRandRange(-7.f, 7.f), Rnd.FRandRange(0.f, 360.f), Rnd.FRandRange(-7.f, 7.f)));
 		// 冰峰顶端的微光
@@ -382,7 +385,8 @@ void AFSArena::BuildDecorLava()
 		const float Rad = Rnd.FRandRange(Half * 0.28f, Half * 0.74f);
 		const FVector Loc(FMath::Cos(Ang) * Rad, FMath::Sin(Ang) * Rad, 0.f);
 		const float S = Rnd.FRandRange(0.5f, 1.7f);
-		FSUtil::AddShape(this, Root, TEXT("Cone"), Loc + FVector(0.f, 0.f, 90.f * S),
+		// SM_Shard 的六棱面在熔岩环境光下会显出黑白两道棱，比光滑锥更像黑曜石
+		FSUtil::AddShape(this, Root, TEXT("Shard"), Loc + FVector(0.f, 0.f, 90.f * S),
 			FVector(S * 0.8f, S * 0.8f, S * 2.4f), T.PropA, false, 0.f,
 			FRotator(Rnd.FRandRange(-14.f, 14.f), Rnd.FRandRange(0.f, 360.f), Rnd.FRandRange(-14.f, 14.f)));
 	}
