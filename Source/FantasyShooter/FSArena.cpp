@@ -468,21 +468,44 @@ void AFSArena::BuildArtProps(int32 ThemeIdx)
 		switch (ThemeIdx)
 		{
 		case 1:
-			// 俯视视角里"趴着的东西"只会被看成地面斑块，所以近场一律用竖立件：
-			// 木十字 / 十字墓碑 / 路灯柱。墓碑用 gravestone_round 那种平板会看不出来。
-			if (c % 3 == 0)      { PutAt(TEXT("graveyard_kit/cross_wood"),        88.f, P, Y); }
-			else if (c % 3 == 1) { PutAt(TEXT("graveyard_kit/gravestone_cross"),  80.f, P, Y); }
-			else                 { PutAt(TEXT("graveyard_kit/lightpost_single"), 150.f, P, Y); }
+			// 俯视视角里"趴着的东西"只会被看成地面斑块，所以近场一律用竖立件。
+			// 碑用**宽**的：monument_1 是 34x32x157 的细杆，缩到 100 高只有 21 宽，
+			// 从 55 度俯视看就是一根线，认不出是碑。gravestone_ty29 是 200x100x220。
+			if (c % 4 == 0)      { PutAt(TEXT("poly/gravestone_ty29"),           96.f, P, Y); }
+			else if (c % 4 == 1) { PutAt(TEXT("graveyard_kit/gravestone_cross"), 80.f, P, Y); }
+			else if (c % 4 == 2) { PutAt(TEXT("poly/post_lantern"),             150.f, P, Y); }
+			else                 { PutAt(TEXT("poly/damaged_grave"),             88.f, P, Y); }
 			break;
 		case 2:
-			PutAt((c % 2 == 0) ? TEXT("castle_kit/rocks_large") : TEXT("castle_kit/rocks_small"),
-				52.f, P, Y);
+			PutAt((c % 2 == 0) ? TEXT("poly/rock_small") : TEXT("castle_kit/rocks_small"),
+				54.f, P, Y);
 			break;
 		default:
-			// 不要 rock_flat / rock_flat_grass：它们又薄又宽，30uu 高的时候像地上的灰水洼
-			PutAt((c % 2 == 0) ? TEXT("survival_kit/rock_c") : TEXT("survival_kit/rock_a"),
-				42.f, P, Y);
+			// 不要 rock_flat / rock_flat_grass：它们又薄又宽，30uu 高的时候像地上的灰水洼。
+			// poly 的 rock_small / rock_medium 是有体积的圆岩，同一个高度下能读成"石头"。
+			PutAt((c % 2 == 0) ? TEXT("poly/rock_small") : TEXT("poly/rock_medium"),
+				46.f, P, Y);
 			break;
+		}
+	}
+
+	// ---- D 段：出生视野里的几件"结构物"
+	// A 段全是低矮碎石，出生画面会显得空。这里补 4 件有高度的东西，但必须卡住
+	// 视野预算：R 500 处大约能看见 220 高，R 700 处只剩 75（物件越高越靠画面上方，
+	// 超出上沿就看不见了）。所以放在 R 510~705，高度压到 230 以内。
+	const int32 NearStructs = 4;
+	for (int32 c = 0; c < NearStructs; ++c)
+	{
+		const float Ang = (6.2831853f / NearStructs) * c + Rnd.FRandRange(-0.30f, 0.30f) + 0.40f;
+		const float Rad = Half * Rnd.FRandRange(0.170f, 0.235f);
+		const FVector P = RingLoc(Ang, Rad);
+		const float Y = Rnd.FRandRange(0.f, 360.f);
+
+		switch (ThemeIdx)
+		{
+		case 1:  PutAt(TEXT("poly/post_lantern"), Rnd.FRandRange(190.f, 220.f), P, Y); break;
+		case 2:  PutAt(TEXT("poly/crystal_x3ul"), Rnd.FRandRange(200.f, 230.f), P, Y); break;
+		default: PutAt(TEXT("poly/post_lantern"), Rnd.FRandRange(200.f, 230.f), P, Y); break;
 		}
 	}
 
@@ -499,16 +522,52 @@ void AFSArena::BuildArtProps(int32 ThemeIdx)
 		switch (ThemeIdx)
 		{
 		case 1:
-			PutAt(TEXT("graveyard_kit/gravestone_cross_large"), 84.f, Center, Y1);
-			PutAt(TEXT("graveyard_kit/pine"),                   250.f, Center + RingLoc(Ang + 1.25f, 110.f), Y2);
+			PutAt(TEXT("poly/pillar"),          Rnd.FRandRange(280.f, 360.f), Center, Y1);
+			PutAt(TEXT("poly/dead_tree_trunk"), Rnd.FRandRange(260.f, 330.f), Center + RingLoc(Ang + 1.25f, 110.f), Y2);
 			break;
 		case 2:
-			PutAt(TEXT("castle_kit/rocks_large"),       76.f, Center, Y1);
-			PutAt(TEXT("castle_kit/tower_square_base"), 300.f, Center + RingLoc(Ang + 1.25f, 120.f), Y2);
+			PutAt(TEXT("poly/simple_pillar"),   Rnd.FRandRange(300.f, 380.f), Center, Y1);
+			PutAt(TEXT("poly/tree_itbx"),       Rnd.FRandRange(240.f, 300.f), Center + RingLoc(Ang + 1.25f, 110.f), Y2);
 			break;
 		default:
-			PutAt(TEXT("survival_kit/rock_b"), 68.f, Center, Y1);
-			PutAt(TEXT("survival_kit/tree"),  230.f, Center + RingLoc(Ang + 1.25f, 110.f), Y2);
+			PutAt(TEXT("poly/roman_pillar"),    Rnd.FRandRange(280.f, 360.f), Center, Y1);
+			PutAt(TEXT("poly/tree_nt2g"),       Rnd.FRandRange(270.f, 340.f), Center + RingLoc(Ang + 1.25f, 110.f), Y2);
+			break;
+		}
+	}
+
+	// ---- B2 段：废墟建筑（稀疏景点）
+	// 这批是"走到跟前才看清"的东西，所以放在 R 1200~1860，而且**只放 7 件**。
+	// 件数一多就会变成"石头阵"：玩家分不清哪是路、哪是障碍，还会挡住敌人。
+	// 高度都压在 300~500 —— 视野预算里 300 距离处约能看见 369 高，再高就出画面上沿了。
+	const int32 RuinCount = 7;
+	for (int32 c = 0; c < RuinCount; ++c)
+	{
+		const float Ang = (6.2831853f / RuinCount) * c + Rnd.FRandRange(-0.26f, 0.26f) + 0.35f;
+		const float Rad = Half * Rnd.FRandRange(0.400f, 0.620f);
+		const FVector P = RingLoc(Ang, Rad);
+		const float Tan = FMath::RadiansToDegrees(Ang) + 90.f;
+		const float Y = Rnd.FRandRange(0.f, 360.f);
+
+		switch (ThemeIdx)
+		{
+		case 1:
+			// 墓园：石门 + 天使像 + 井（井是"活人留下的东西"，比墓碑更有人味）
+			if (c % 3 == 0)      { PutAt(TEXT("poly/graveyard_gate"), Rnd.FRandRange(340.f, 400.f), P, Tan); }
+			else if (c % 3 == 1) { PutAt(TEXT("poly/angelstatue"),    Rnd.FRandRange(300.f, 360.f), P, Y); }
+			else                 { PutAt(TEXT("poly/well"),           150.f, P, Y); }
+			break;
+		case 2:
+			// 熔岩：高塔 + 水晶柱 + 喷泉（干涸的喷泉放在熔岩场上很对味）
+			if (c % 3 == 0)      { PutAt(TEXT("poly/tower"),          Rnd.FRandRange(420.f, 500.f), P, Y); }
+			else if (c % 3 == 1) { PutAt(TEXT("poly/crystal_x3ul"),   Rnd.FRandRange(260.f, 330.f), P, Y); }
+			else                 { PutAt(TEXT("poly/water_fountain"), 200.f, P, Y); }
+			break;
+		default:
+			// 幽蓝：拱门 + 哨塔 + 风车。拱门朝切向摆，玩家从"门洞"里穿过去的时候有纵深
+			if (c % 3 == 0)      { PutAt(TEXT("poly/arch_gubg"),      Rnd.FRandRange(380.f, 440.f), P, Tan); }
+			else if (c % 3 == 1) { PutAt(TEXT("poly/guard_tower"),    Rnd.FRandRange(300.f, 360.f), P, Y); }
+			else                 { PutAt(TEXT("poly/windmill"),       Rnd.FRandRange(330.f, 390.f), P, Y); }
 			break;
 		}
 	}
@@ -526,25 +585,25 @@ void AFSArena::BuildArtProps(int32 ThemeIdx)
 		switch (ThemeIdx)
 		{
 		case 1:
-			PutAt((c % 5 == 0) ? TEXT("graveyard_kit/pine_crooked") : TEXT("graveyard_kit/pine"),
-				Rnd.FRandRange(300.f, 400.f), Center, Y1);
+			PutAt((c % 5 == 0) ? TEXT("poly/dead_tree_trunk") : TEXT("graveyard_kit/pine"),
+				Rnd.FRandRange(320.f, 420.f), Center, Y1);
 			PutAt(TEXT("graveyard_kit/iron_fence"), 118.f, Center + RingLoc(Ang + 0.055f, 150.f), Tan);
 			break;
 		case 2:
-			PutAt((c % 6 == 0) ? TEXT("castle_kit/tower_square_base") : TEXT("castle_kit/tree_large"),
-				Rnd.FRandRange(280.f, 380.f), Center, Y1);
+			PutAt((c % 6 == 0) ? TEXT("castle_kit/tower_square_base") : TEXT("poly/tree_itbx"),
+				Rnd.FRandRange(300.f, 400.f), Center, Y1);
 			PutAt(TEXT("castle_kit/wall_half"), 175.f, Center + RingLoc(Ang + 0.055f, 155.f), Tan);
 			break;
 		default:
-			PutAt((c % 4 == 0) ? TEXT("survival_kit/tree_tall") : TEXT("survival_kit/tree"),
-				Rnd.FRandRange(280.f, 370.f), Center, Y1);
+			PutAt((c % 4 == 0) ? TEXT("poly/pine_pobz") : TEXT("survival_kit/tree"),
+				Rnd.FRandRange(300.f, 390.f), Center, Y1);
 			PutAt(TEXT("survival_kit/fence_fortified"), 105.f, Center + RingLoc(Ang + 0.055f, 148.f), Tan);
 			break;
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("[FSARTPROP] theme=%d near=%d mid=%d far=%d placed=%d"),
-		ThemeIdx, NearClusters, MidClusters, FarClusters, Placed);
+	UE_LOG(LogTemp, Log, TEXT("[FSARTPROP] theme=%d near=%d mid=%d ruin=%d far=%d placed=%d"),
+		ThemeIdx, NearClusters, MidClusters, RuinCount, FarClusters, Placed);
 }
 
 // ------------------------------------------------------------------ 天气与粒子

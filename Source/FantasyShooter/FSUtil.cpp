@@ -117,36 +117,78 @@ namespace FSUtil
 			const FString N = FString(InName).ToLower();
 			auto Has = [&N](const TCHAR* K) { return N.Contains(K); };
 
-			if (Has(TEXT("iron")) || Has(TEXT("metal")) || Has(TEXT("anvil")) || Has(TEXT("gate")))
+			// 石材色按主题微调，好几个分支都要用，抽出来避免复制三份 switch。
+			// M_Art 是 Unlit，线性值直接当亮度；实测屏幕曝光约 ×1.35，所以
+			// 0.078 线性 ≈ 109 sRGB —— 比地板 (22,27,39) 亮，又不刺眼。
+			// 熔岩场景的地面和裂缝是暖橙，冷灰石头会像"贴上去的灰纸"，所以换暖褐灰。
+			auto Stone = []() -> FLinearColor
+			{
+				switch (GArtTheme)
+				{
+				case 1:  return FLinearColor(0.082f, 0.090f, 0.104f);   // 霜封：偏冷的浅灰
+				case 2:  return FLinearColor(0.112f, 0.072f, 0.048f);   // 熔岩：暖褐灰
+				default: return FLinearColor(0.078f, 0.084f, 0.105f);   // 幽蓝：蓝灰
+				}
+			};
+
+			// 石柱必须最先判：fence_pillar / broken_fence_pillar 是**石柱**，
+			// 名字里却带 fence，一旦让木作分支先跑就会被涂成栅栏的棕色。
+			if (Has(TEXT("pillar")) || Has(TEXT("column")))
+			{
+				return Stone();
+			}
+			// 金属：铁栏 / 铁砧。**这里不收 "gate"** —— poly 的 graveyard_gate 是石墓门，
+			// 落成冷铁色会像画面上一块黑补丁。
+			if (Has(TEXT("iron")) || Has(TEXT("metal")) || Has(TEXT("anvil")))
 			{
 				return FLinearColor(0.055f, 0.060f, 0.074f);   // 金属：冷灰
 			}
+			// 雕像：大理石要比背景岩石亮一档（线性 0.168 ≈ 屏幕 130），否则俯视画面里
+			// 和石头糊成一片，就失去"地标"作用了。
+			if (Has(TEXT("statue")))
+			{
+				return FLinearColor(0.168f, 0.166f, 0.158f);
+			}
+			// 骨：头骨这类小件是用来暗示"这里死过人"的，比石稍亮一点就够。
+			if (Has(TEXT("skull")))
+			{
+				return FLinearColor(0.150f, 0.146f, 0.128f);
+			}
+			// 水晶：这批素材里唯一带"自发光感"的东西，给一线冷青。
+			// 亮度刻意压在 0.13 以下 —— 再亮就是暗场景里的手电筒。
+			if (Has(TEXT("crystal")))
+			{
+				return FLinearColor(0.048f, 0.112f, 0.132f);
+			}
+			// 提灯：暖琥珀。全场唯一的暖色小点，用来打破满屏冷灰。
+			// **必须压暗**：第一版给 0.185/0.128/0.045（屏幕约 250,175,60），
+			// 结果四根灯柱成了画面主角，比玩家还抢眼。0.082 ≈ 屏幕 110，够看出暖色。
+			if (Has(TEXT("lantern")))
+			{
+				return FLinearColor(0.082f, 0.056f, 0.020f);
+			}
+			// 植被（tree_stump_with_moss 也走这条：苔藓树桩本来就该是绿的）
 			if (Has(TEXT("tree")) || Has(TEXT("pine")) || Has(TEXT("grass")) || Has(TEXT("hedge"))
 				|| Has(TEXT("leaf")) || Has(TEXT("pumpkin")) || Has(TEXT("hay")) || Has(TEXT("bush")))
 			{
 				return FLinearColor(0.028f, 0.098f, 0.036f);   // 植被：暗绿
 			}
+			// 旗
 			if (Has(TEXT("flag")) || Has(TEXT("banner")) || Has(TEXT("pennant")))
 			{
 				return FLinearColor(0.120f, 0.026f, 0.023f);   // 旗：暗红
 			}
+			// 木作。mill 单独列：windmill 不含 wood / fence 任何关键词，
+			// 不补这一条就会掉进石材，变成"石头风车"。
 			if (Has(TEXT("box")) || Has(TEXT("barrel")) || Has(TEXT("chest")) || Has(TEXT("plank"))
 				|| Has(TEXT("wood")) || Has(TEXT("fence")) || Has(TEXT("bench")) || Has(TEXT("table"))
 				|| Has(TEXT("cart")) || Has(TEXT("coffin")) || Has(TEXT("door")) || Has(TEXT("log"))
-				|| Has(TEXT("trunk")) || Has(TEXT("bedroll")))
+				|| Has(TEXT("trunk")) || Has(TEXT("bedroll")) || Has(TEXT("mill")))
 			{
 				return FLinearColor(0.068f, 0.039f, 0.020f);   // 木作：暗棕
 			}
-			// 石作：比地板亮一档，但仍压在"暗色场景里的岩块"这一档上。
-			// M_Art 是 Unlit，线性值直接当亮度；实测屏幕曝光约 ×1.35，所以
-			// 0.078 线性 ≈ 109 sRGB —— 比地板 (22,27,39) 亮，又不刺眼。
-			// 熔岩场景的地面和裂缝是暖橙，冷灰石头会像"贴上去的灰纸"，所以换成暖褐灰。
-			switch (GArtTheme)
-			{
-			case 1:  return FLinearColor(0.082f, 0.090f, 0.104f);   // 霜封：偏冷的浅灰
-			case 2:  return FLinearColor(0.112f, 0.072f, 0.048f);   // 熔岩：暖褐灰
-			default: return FLinearColor(0.078f, 0.084f, 0.105f);   // 幽蓝：蓝灰
-			}
+			// 其余一律石作：墙 / 拱 / 塔 / 井 / 喷泉 / 墓碑 / 废墟 / 基座
+			return Stone();
 		}
 	}
 

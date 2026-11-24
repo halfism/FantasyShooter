@@ -23,11 +23,21 @@ Build/
 # 但网格源正好同扩展名。只放行这一个目录，别写成全局例外。
 !ArtSource/Meshes/*.obj
 
-# 外部 CC0 资源（kenney.nl）：**只提交原始 zip**，它们是可复现的源。
+# 外部资源（kenney.nl）：**只提交原始 zip**，它们是可复现的源。
 # 解压出来的 FBX/GLB/OBJ 三份格式有 43MB，全是派生物，别进库。
 ArtSource/Downloaded/*/
-# Converted 是 Tools/import_props.py 从上面那些 zip 现场生成的中间物（Z-up/厘米制 OBJ）
-ArtSource/Converted/
+# Converted 是脚本从上面那些 zip 现场生成的中间物（Z-up/厘米制 OBJ），默认不入库。
+# 注意：不能直接写 `ArtSource/Converted/` —— Git 不会进入被忽略的目录，里面的
+# `!` 例外就永远不生效。必须逐项排除 + 逐项放行。
+ArtSource/Converted/*
+# poly.pizza 那批的 OBJ 例外：原始 glb 带贴图、体积大（不入库），但转出来的 OBJ
+# 只剩几何、纯文本可 diff，和 ArtSource/Meshes/*.obj 是同一性质的源文件。
+# 只提交 Tools/poly_select.txt 里选中的那些（未选中的模型连 OBJ 都不生成）。
+!ArtSource/Converted/poly/
+!ArtSource/Converted/poly/*.obj
+!ArtSource/Converted/poly/CREDITS.md
+# art.mtl 是上面那些 OBJ 的共享材质声明（只为了不被 Interchange 当成无材质文件）
+!ArtSource/Converted/poly/art.mtl
 
 # 打包产物
 Packaged/

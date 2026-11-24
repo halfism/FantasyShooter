@@ -1,0 +1,68 @@
+# poly.pizza 选中的模型（一行一个，`#` 后是注释）
+#
+# 挑选标准（都是被截图打脸之后总结出来的）：
+#   1. **必须是竖立件**。俯视 55 度下横躺的东西一律被读成"地面斑块"，
+#      所以 log / rock_flat / stairs 这类再精致也不用。
+#   2. tris 控制在 6k 以内。173 个候选里有 32220 面的"整片树林"，那是组合体，
+#      不是单件道具，放进 3000uu 见方的场地会撑爆。
+#   3. 尺寸单位不可靠（有的 glb 是毫米，`ruined_building` 报 475180cm），
+#      但 AddProp 按目标高度等比缩放，所以只要**长宽高比例**正常就能用。
+#      1e7 以上的直接放弃 —— float32 在那个量级的精度只有个位数，缩放后会抖。
+#
+# 未列出的模型不会被转成 OBJ，也就不进版本库。
+
+# ---- 通用废墟构件（三个主题都能用）
+arch_gubg                  # 大拱门 614x57x753，只有 148 面，性价比最高的一件
+pillar                     # 立柱 100x100x440
+roman_pillar               # 罗马柱 61x61x494（更细，成排用）
+simple_pillar              # 粗柱 300x300x705（做断垣残壁的主柱）
+column                     # 柱 130x130x407
+column_wide                # 矮柱 70x70x240
+broken_fence_pillar        # 断柱 50x50x150 —— 废墟感的关键，比完整柱更"荒"
+guard_tower                # 哨塔 149x149x384
+tower                      # 高塔 944x898x1460
+watertower                 # 水塔 50x50x67
+windmill                   # 风车 163x136x236
+well                       # 井 67x100x125
+water_fountain             # 石喷泉 182x182x243
+pedestal                   # 基座 174x174x231（配雕像）
+ruined_building            # 破屋 475x525x224（单位是毫米）
+temple_of_prophecy_ruined  # 神庙废墟 226x226x184
+monument_1                 # 纪念碑 34x32x157
+post_lantern               # 立柱灯 64x157x330
+lantern                    # 提灯 64x64x93
+banner_wall                # 挂墙旗 164x59x285
+
+# ---- 森林（主题 0 幽蓝）
+tree_itbx                  # 低模树 240x240x603，210 面
+tree_nt2g                  # 大树 708x658x973
+dead_tree_trunk            # 枯树干 406x490x686
+pine_pobz                  # 松树 642x622x872
+rock_medium                # 中岩 305x248x190
+rock_small                 # 小岩 239x241x227
+tree_stump_with_moss       # 苔藓树桩 136x103x62
+wooden_fence               # 木栅 18x159x73
+
+# ---- 墓园（主题 1 霜封）
+gravestone_ty29            # 墓碑 200x100x220
+grave                      # 坟 200x100x213
+damaged_grave              # 破损坟 208x114x211
+grave_mhim                 # 小墓 138x74x131
+cemetary                   # 墓群 197x152x125
+angelstatue                # 天使像 248x351x381
+horse_statue               # 马像 174x338x585
+coffin_rp0e                # 棺材 200x300x132
+graveyard_gate             # 墓园门 585x300x445
+metal_fence                # 铁栏 355x11x288
+
+# ---- 城堡 / 熔岩（主题 2）
+stag_statue                # 鹿像 231x127x463
+fox_statue                 # 狐像 135x168x375
+statue                     # 人像 85x137x159
+crystal_x3ul               # 水晶柱 173x200x519，106 面
+crystal_pqc5               # 水晶簇 440x519x516
+cart                       # 板车 172x329x132
+broken_cart                # 破车 331x283x138
+skull                      # 头骨 92x91x90
+stone_wall                 # 矮石墙 156x25x45
+fence_gate                 # 栅栏门 400x50x300

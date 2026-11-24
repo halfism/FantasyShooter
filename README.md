@@ -41,7 +41,7 @@ UE 5.8 纯 C++ 肉鸽射击游戏。无蓝图；角色、敌人与场景由**程
 | `Source/FantasyShooter` | 全部玩法代码 |
 | `Config` | 默认引擎 / 游戏 / 输入配置 |
 | `Content` | 地图、材质、字体资产 |
-| `ArtSource` | 美术源文件（`Meshes/*.obj` 由脚本生成；`Downloaded/*.zip` 是外部 CC0 包） |
+| `ArtSource` | 美术源文件（`Meshes/*.obj` 由脚本生成；`Downloaded/` 是外部资源；`Converted/poly/*.obj` 是留档的转换产物） |
 | `Tools` | 编译、打包、截图、验证与自动提交脚本 |
 
 ## 美术资产
@@ -107,9 +107,52 @@ python Tools\fetch_art.py      # 下载 + 解压到 ArtSource/Downloaded（需�
 - **丢掉 OBJ 的 `g`/`o` 行**：导入器会拿组名当资产名，带连字符的名字和 `Group` 就是这么来的。
 - 摆放一律按**目标高度**等比缩放（`FSUtil::AddProp` 的 `TargetHeight`），枢轴在底面；
   全部 `NoCollision`，不挡走位。
-- 装饰分三段铺（详见 `AFSArena::BuildArtProps`）：出生视野内 12 件稀疏竖立件、
-  中景 18 簇、场地边缘 36 簇林墙。**俯视视角下只有竖立件能被认出来**，
-  平板状的东西一律看成地面斑块。
+- 装饰分五段铺（详见 `AFSArena::BuildArtProps`）：出生视野内 12 件稀疏竖立件 +
+  4 件灯柱/水晶、中景 18 簇、中景废墟建筑 7 件、场地边缘 36 簇林墙。
+  **俯视视角下只有竖立件能被认出来**，平板状的东西一律看成地面斑块。
+
+### 3. poly.pizza 废墟构件（`Tools/fetch_poly.py` + `Tools/glb2obj.py`）
+
+kenney 那批是卡通方块风，缺"建筑结构"——没有拱门、塔、风车、断柱，场地读不出
+"废墟"的意味。这批从 [poly.pizza](https://poly.pizza) 取 `.glb`，补的就是这些。
+
+为什么走 poly.pizza：它的模型文件直接暴露在 `static.poly.pizza/<uuid>.glb` 上，
+不需要登录、不走 Google Drive / itch.io（这两个在本机实测全部不通），
+下载 ~56KB/s（kenney 只有 12~16KB/s），而且大量模型本来就**没有 UV 没有贴图**，
+跟本工程的纯色渲染天然合拍。
+
+| 步骤 | 脚本 | 产物 |
+| --- | --- | --- |
+| 搜索 + 下载 | `Tools/fetch_poly.py` | `ArtSource/Downloaded/poly/*.glb` + `manifest.json`（授权/作者/tris） |
+| 挑模型 | `Tools/poly_select.txt` | 白名单，48 个 |
+| 转 OBJ | `Tools/glb2obj.py` | `ArtSource/Converted/poly/*.obj` + `CREDITS.md` |
+| 导入 | `Tools/import_poly.py` | `/Game/Art/Props/poly/` + `M_Art_poly` |
+
+```powershell
+python Tools\fetch_poly.py        # 173 个候选，约 13 分钟
+python Tools\fetch_poly.py --meta # 只补授权/作者（首次用了粗略正则，作者全是 unknown）
+python Tools\glb2obj.py           # 按白名单转换；未选中的连 OBJ 都不生成
+# 然后用 UnrealEditor-Cmd 跑 import_poly.py（同上面那条命令）
+```
+
+这批的关键踩坑：
+
+- **自己解 glb，不走 UE 的 glTF 导入器**。Interchange 导 glb 会连带建材质/贴图资产，
+  而贴图在 `-nullrhi` 下拿不到 GPU 资源（见上一节），导了也是白导。
+  `glb2obj.py` 只拆 JSON + BIN 两个 chunk，只取 POSITION / NORMAL / 索引。
+- **枢轴要归到底面中心**。kenney 的 OBJ 天然满足（基座在 Y=0），glb 不满足；
+  一开始把 `min(原始 z)` 当底面（正确是 `min(原始 y)`，glTF 是 Y-up），
+  转出来 Z 是 ±87 对称，放进 UE 就一半埋进地里。
+- **OBJ 必须有 `vt` 行**。`InterchangeOBJTranslator` 在没有 UV 时会
+  `ensure(UVs.IsValidIndex(VertexData.UVIndex))`，导入虽能完成但每次刷一整屏错误栈，
+  冒烟测试会当成故障。没有 UV 就按 XY 平面投影生成一份。
+- **精度 `%.2f` 就够**（厘米制下 0.1mm）。glTF 的顶点是展开的（每面独立顶点），
+  用 `%.6f` 会让这批 OBJ 从 5.5MB 涨到十来 MB。
+- **授权要分开记**：这 48 个里 31 个 CC0、17 个 CC-BY 3.0，后者要求署名。
+  `glb2obj.py` 会生成 `ArtSource/Converted/poly/CREDITS.md`（名称 / 标题 / 授权 / 作者 / 来源链接），
+  和 OBJ 一起入库。
+- `.gitignore` 不能直接写 `ArtSource/Converted/`：Git 不会进入被忽略的目录，
+  里面的 `!` 例外永远不生效。得逐项排除（`ArtSource/Converted/*`）再逐项放行。
 
 ## 构建与运行
 
